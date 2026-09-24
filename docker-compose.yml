@@ -50,8 +50,10 @@ services:
       interval: 5s
       retries: 20
 
+  # API-avbilden byggs en gång (av api) och återanvänds av migrate och worker.
   migrate:
-    build: ./services/api
+    image: redovisningai-api:local
+    pull_policy: never
     environment: *api-env
     command: ["sh", "-c", "redovisningai migrate && redovisningai worker-schema"]
     depends_on:
@@ -59,6 +61,7 @@ services:
 
   api:
     build: ./services/api
+    image: redovisningai-api:local
     environment: *api-env
     volumes: [storage:/data/storage]
     ports: ["127.0.0.1:8000:8000"]
@@ -67,7 +70,8 @@ services:
     restart: unless-stopped
 
   worker:
-    build: ./services/api
+    image: redovisningai-api:local
+    pull_policy: never
     environment: *api-env
     volumes: [storage:/data/storage]
     command: ["procrastinate", "--app=redovisningai.jobs.worker.app", "worker"]
@@ -80,6 +84,7 @@ services:
     build:
       context: ./apps/web
       args: { RAI_API_URL: http://api:8000 }
+    image: redovisningai-web:local
     ports: ["127.0.0.1:3000:3000"]
     depends_on: [api]
     restart: unless-stopped

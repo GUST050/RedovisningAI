@@ -74,8 +74,44 @@ else
 fi
 
 # ------------------------------------------------------------------ 4. Bygg och starta
-say "Bygger och startar programmet (första gången tar det 3–5 minuter)"
-docker compose up -d --build
+free_gb=$(df -g "$HOME" | awk 'NR==2 {print $4}')
+if [ "${free_gb:-99}" -lt 8 ]; then
+  echo "Varning: bara ${free_gb} GB ledigt på disken. Docker behöver ungefär 8 GB."
+  echo "Frigör utrymme (t.ex. Inställningar → Allmänt → Lagring) om bygget misslyckas."
+fi
+
+restart_docker() {
+  echo "Startar om Docker Desktop …"
+  osascript -e 'quit app "Docker"' >/dev/null 2>&1 || true
+  sleep 5
+  open -a Docker
+  for _ in $(seq 1 90); do docker info >/dev/null 2>&1 && return 0; sleep 2; done
+  return 1
+}
+
+# Bygger en avbild i taget (mindre belastning på Dockers disk än parallella byggen).
+build_all() {
+  docker compose build api && docker compose build web
+}
+
+say "Bygger programmet (första gången tar det 3–5 minuter)"
+LOG=$(mktemp)
+if ! build_all 2>&1 | tee "$LOG"; then
+  if grep -qiE "read-only file system|no space left|input/output error" "$LOG"; then
+    echo
+    echo "Dockers disk svarade inte (vanligt direkt efter installation eller vid ont om utrymme)."
+    restart_docker || fail "Docker startade inte om. Öppna Docker Desktop manuellt och kör skriptet igen."
+    say "Försöker bygga igen"
+    build_all || fail "Bygget misslyckades igen. Öppna Docker Desktop → felsökningsikonen (🐞) → 'Clean / Purge data', kör sedan skriptet igen. Kontrollera också att du har minst 8 GB ledigt."
+  else
+    fail "Bygget misslyckades. Klistra in de sista raderna ovan i chatten så hjälper jag dig."
+  fi
+fi
+rm -f "$LOG"
+ok "Programmet är byggt"
+
+say "Startar programmet"
+docker compose up -d
 
 printf "Väntar på API:t"
 for _ in $(seq 1 90); do
