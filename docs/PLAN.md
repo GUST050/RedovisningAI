@@ -1,9 +1,10 @@
-# RedovisningAI – produkt- och arkitekturplan (v3, researchbaserad)
+# RedovisningAI – produkt- och arkitekturplan (v3.1, researchbaserad)
 
 > **Historik**
 > - v1: ursprunglig plan (ChatGPT).
 > - v2: första revidering (svagheter i domän, AI-design, juridik, byggordning).
-> - **v3 (denna):** egen research om marknad, konkurrenter, API:er, svensk lag, AI-leverantörer och säkerhet (september 2026). Flera antaganden i v2 visade sig vara fel eller svaga och har ändrats. Se §0.
+> - v3: egen research om marknad, konkurrenter, API:er, svensk lag, AI-leverantörer och säkerhet (september 2026). Flera antaganden i v2 visade sig vara fel eller svaga och har ändrats. Se §0.
+> - **v3.1 (denna):** kontroll av v3:s differentiering. Skattekontoavstämning, PTL/KYC och Reko-checklistor finns redan hos andra. Differentieringen är omarbetad i §3.1: ärenden i stället för signaler, kundminne och kundfrågeloop.
 >
 > Paragrafhänvisningar som "(v1 §69)" syftar på numreringen i den ursprungliga planen. Källor finns i §17.
 
@@ -13,14 +14,14 @@
 
 | # | Antagande i v1/v2 | Vad researchen visar | Ändring i v3 |
 |---|---|---|---|
-| 1 | Svenska granskningskontroller (moms, förbrukat aktiekapital, kostnadsavvikelser) är vår differentiering | **Fortnox Insikter har redan** kostnadsavvikelser, momsavvikelser (ingående moms), omsättningstrend (>30 % mot föregående år/R12), kostnadstrend, förbrukat aktiekapital och EU-handel, gratis inne i Fortnox byråmiljö | Kontroller är **hygien, inte differentiering**. Differentieringen flyttas till: (a) **systemoberoende portfölj**, (b) **granskningsflöde och dokumentation**, (c) **evidens och förklaring**, (d) **PTL-stöd**, (e) **avstämning mot externa källor** (skattekonto) |
+| 1 | Svenska granskningskontroller (moms, förbrukat aktiekapital, kostnadsavvikelser) är vår differentiering | **Fortnox Insikter har redan** kostnadsavvikelser, momsavvikelser (ingående moms), omsättningstrend (>30 % mot föregående år/R12), kostnadstrend, förbrukat aktiekapital och EU-handel, gratis inne i Fortnox byråmiljö | Kontroller är **hygien, inte differentiering**. Differentieringen flyttas. **Se §3.1 (v3.1)**, där PTL och skattekonto inte längre räknas som unika |
 | 2 | Fortnox räcker som första integration | Fortnox har ~37 % av marknaden (585 000 kunder, Q3 2024). **Resten av en typisk byrås kunder ligger i andra system** (Spiris, Björn Lundén m.fl.) | MVP = Fortnox-API **+** fullvärdig SIE4-filväg. **Spiris API** i V1.5 i stället för V2 |
 | 3 | Fortnox är en neutral plattform | Fortnox ägs sedan 2025 av EQT/Hallrup och är avnoterat. **Fortnox har lanserat BLINK, en egen bokföringstjänst med anställda konsulter** som konkurrerar med byråerna | Positionera som **byråns oberoende verktyg**. Plattformsrisken är högre än i v2: SIE-filvägen måste alltid fungera fullt ut |
 | 4 | Integrationen är gratis | Fortnox: API-licens för klient på byråpaket ca **59 kr/mån** (direktmodellen), eller en marknadsplatsmodell där kostnaden läggs på kundens Fortnox-faktura utan separat licens. Spiris: API-tillägg ca **69 kr/mån** | Enhetsekonomin måste räkna med detta. **Välj Fortnox marknadsplatsmodell** och bekräfta villkoren i Fas 0 |
 | 5 | Nattlig synk av 300 klienter är enkel | Fortnox **service accounts** (client credentials + TenantId) ger obevakad åtkomst, men **varje klientbolag måste auktoriseras av en administratör**. Rate limit 25 anrop/5 s per klient-id och tenant | Bygg ett **massonboardingflöde** (auktoriseringslänkar per klient, status per koppling). SIE4-endpointen (`/3/sie/4?financialyear=`) ger ett helt år i ett anrop |
-| 6 | Skattekontot kan bara flaggas | **Skatteverkets Skattekonto-API** (v2.0) ger saldo och transaktioner. Byrån kan få läsbehörighet som ombud via "Ombud och behörigheter". Kräver organisationscertifikat | **Automatisk avstämning 1630 ↔ skattekonto** i V1.5. Konkret differentiering som Fortnox Insikter inte listar |
+| 6 | Skattekontot kan bara flaggas | **Skatteverkets Skattekonto-API** (v2.0) ger saldo och transaktioner. Byrån kan få läsbehörighet som ombud via "Ombud och behörigheter". Kräver organisationscertifikat | Avstämning 1630 ↔ skattekonto i V1.5. **v3.1:** Fortnox har redan en gratis Skatteverket-koppling som läser in skattekontotransaktioner (avstämningen i "Stäm av konto" är dock manuell), och det finns tredjepartsappar. Detta är **hygien, inte differentiering** |
 | 7 | Svenska regler är statiska | Flera regler ändrades 2026: **matmoms 6 %** (1 apr 2026 – 31 dec 2027), **sänkta arbetsgivaravgifter för unga** (20,81 %, 1 apr 2026 – 30 sep 2027, lön upp till 25 000 kr/mån). **Kontrollbalansräkningen föreslås slopas** (SOU 2023:34, status oklar) | Ny komponent: **regelkatalog med lagstöd och giltighetsperioder** (§5). Ingen skattesats eller procentgräns hårdkodas |
-| 8 | PTL är bara en risk att hantera | Redovisningskonsulter utgör ~90 % av verksamhetsutövarna under länsstyrelsernas PTL-tillsyn. Myndigheterna släppte 2025 en vägledning med ~90 varningssignaler. Rapportering sker via goAML | **PTL-stöd blir en produktfunktion** (V1.5, valideras i Fas 0): signaler ur bokföringen, underlag för kundriskbedömning och dokumentation, med strikt synlighet |
+| 8 | PTL är bara en risk att hantera | Redovisningskonsulter utgör ~90 % av verksamhetsutövarna under länsstyrelsernas PTL-tillsyn. Myndigheterna släppte 2025 en vägledning med ~90 varningssignaler. Rapportering sker via goAML | PTL-signaler ur bokföringen i V1.5. **v3.1:** KYC och riskbedömning finns redan (Visma Advisor KYC, Björn Lundéns Lundify). Vi bygger **bara transaktionssignaler** och exporterar till byråns KYC-verktyg, inget eget KYC-system |
 | 9 | "Välj AI-leverantör efter eval" | **Claude via Anthropics eget API har i dag ingen EU-inferens** (bara `us`/`global`). EU-körning av Claude kräver AWS Bedrock eller Google Vertex i EU-region. Azure OpenAI i Sweden Central har EU Data Zone men hade **ett långt avbrott 27 jan 2026**. Mistral är EU-bolag, men noll datalagring (ZDR) kräver Scale-plan (annars 30 dagars lagring) | Krav: **två EU-hostade leverantörer i olika regioner** bakom abstraktionen, med automatisk failover. Ingen global routning |
 | 10 | LLM:er kan kontrolleras i efterhand | Forskning visar att LLM:er klarar enkla uppslag men **faller kraftigt på flerstegsberäkningar** i finansdata. FinanceBench: GPT-4-Turbo med retrieval svarade fel eller vägrade på 81 % av frågorna | Bekräftar v2:s beslut: **AI:n skriver aldrig siffror**, servern renderar dem |
 | 11 | Falsklarm hanteras med suppression | Forskningen om journal entry testing: regelbaserade röda flaggor ger **många falsklarm från återföringar, avsättningar och bokslutsposter**. Hybridmodeller (regler + ML-rangordning) förbättrar precisionen | Mät **precision per regel**. Bokslutsmönster känns igen före larm. ML-rangordning på byråns egen feedback i V2 |
@@ -63,6 +64,9 @@
 | Rapportverktyg (Business Board, Fortnox Rapport & Analys) | Dashboards, budget, rapporter | Vi granskar och förklarar. Budget mot utfall läggs till via #PBUDGET |
 | AI-byråer (Wint, Accounted m.fl.) | Automatiserad bokföring med människor där det behövs | De pressar priserna. Vi säljer till traditionella byråer som behöver bli effektivare för att klara prispressen |
 | Internationellt (Syft, MindBridge m.fl.) | Rapportering / anomalidetektion över huvudbok | Saknar BAS, SIE, svensk moms, AGA, ABL, PTL och svenskt arbetsflöde |
+| Fortnox Byråstöd, WeSoft Byråstöd m.fl. | Checklistor, tidrapportering, resursplanering, löpande avstämningar och dokumentation (Fortnox: "stöder Reko och Rex, men inte fullt ut än") | Checklistor och Reko-dokumentation är **inte unika**. Vi kopplar dokumentationen till fynd och evidens i stället för till checkrutor |
+| Fortnox Skatteverket-koppling, JSI Skattekonto | Skattekontots transaktioner läses in, automatisk bokföring via regler | Skattekontoavstämning är **inte unik**. Vi erbjuder den för icke-Fortnox-kunder och inom granskningsflödet |
+| Visma Advisor KYC, Lundify (Björn Lundén) | PTL: riskbedömning, kundkännedom, bevakning, avvikelser, rapportering | Vi bygger inget KYC-system, bara transaktionssignaler som matar deras verktyg |
 
 ### 1.3 Data och API:er
 | Fakta | Konsekvens |
@@ -144,17 +148,58 @@
 
 ## 3. Positionering och kil
 
-### 3.1 Positionering
-> **Byråns oberoende granskningsverktyg: en arbetsyta för hela kundportföljen, oavsett bokföringssystem.**
-> Varje natt gås alla kunders bokföring igenom. Verktyget visar var konsulten ska lägga sin tid, stämmer av mot externa källor, dokumenterar granskningen enligt Reko och tar fram underlag till kundmötet. Varje siffra går att spåra till verifikationen.
+### 3.1 Positionering och ärlig differentieringsanalys (v3.1)
 
-Fyra säljbara skäl, i prioritetsordning (valideras i Fas 0):
-1. **En portfölj, alla system.** Fortnox, Spiris, BL och övriga via SIE i samma vy och med samma kontroller.
-2. **Granskning som går att bevisa.** Kvittens, motivering, låsta snapshots och "ändrad efter godkännande". Reko 140-dokumentation per kund och period.
-3. **Avstämning mot externa källor.** Skattekonto via Skatteverkets API (V1.5), senare bank.
-4. **PTL-stöd.** Signaler ur bokföringen, kundriskbedömning och dokumentation (V1.5, om Fas 0 bekräftar behovet).
+**Ärligt läge:** nästan varje enskild funktion i v1–v3 finns redan någonstans.
 
-Förklaringar, AI-kommentarer och kundmötesunderlag finns också med, men de är **förstärkning**, inte huvudargumentet.
+| Funktion | Finns redan hos | Unik för oss? |
+|---|---|---|
+| Avvikelse- och trendkontroller, moms, förbrukat aktiekapital | Fortnox Insikter (gratis för Fortnox-byråer) | Nej |
+| Checklistor, avstämningar, Reko-dokumentation | Fortnox Byråstöd, WeSoft m.fl. | Nej |
+| Skattekontots transaktioner | Fortnox Skatteverket-koppling (gratis), JSI Skattekonto | Nej |
+| PTL/KYC, riskbedömning | Visma Advisor KYC, Lundify | Nej |
+| Chatta med bokföringen | Fortnox AI-assistent, MCP-bryggor | Nej |
+| Rapporter och dashboards | Fortnox Rapport & Analys, Business Board | Nej |
+
+Det som **inte** hittades i researchen är kombinationen nedan. Den blir därför produktens kärna:
+
+#### Fem skäl att välja oss (hypoteser att bevisa i Fas 0)
+
+1. **Ett ärende i stället för tio signaler (rotorsaksgruppering).**
+   Befintliga verktyg larmar per signal: "kostnadsavvikelse", "momsavvikelse" och "trendbrott" var för sig. Oftast har de en gemensam orsak. Exempel: *en saknad leverantörsfaktura* ger en kostnadsavvikelse, en momsavvikelse och ett oförklarat bankuttag samtidigt. Vi grupperar relaterade fynd till **ett ärende** med en rotorsakshypotes, evidens och en föreslagen åtgärd. Här gör AI verklig nytta: den kopplar ihop deterministiska fynd till en förklaring (det kräver bedömning, inte beräkning). Konsulten ska få **3 beslut per kund i stället för 30 larm**.
+
+2. **Kundminne: byrån glömmer aldrig hur något förklarades.**
+   Varje bedömning sparas per kund och mönster: vem, när, motivering och underlag. Nästa gång samma mönster dyker upp visas: *"Samma mönster som mars 2026, bedömt OK av Anna: kvartalsvis hyresfaktura."* Det ger:
+   - mindre brus varje månad (automatiskt förslag baserat på tidigare beslut, alltid kvitterat av människa),
+   - **enkel överlämning** när en konsult slutar eller är på semester. Branschen har brist på konsulter, och kunskapen om varje kund sitter i dag i huvudet på den som har kunden,
+   - en **inlåsningseffekt som växer över tid**: byråns samlade bedömningar finns inte hos någon annan. Det är produktens egentliga vallgrav.
+
+3. **Kundfrågeloop kopplad till ärendet.**
+   Frågan till kunden skapas från ärendet och skickas som en säker länk (senare via kundportal). Kundens svar och underlag (kvitto, avtal) hamnar **direkt på ärendet**, och därmed i dokumentationen. I dag jagar konsulter svar via mejl och klistrar in dem manuellt.
+
+4. **En portfölj oavsett system, från en leverantör som inte konkurrerar med byrån.**
+   Fortnox, Spiris, BL och övriga via SIE i samma vy och med samma regler. Fortnox kan strukturellt inte göra detta för Spiris-kunder, och driver samtidigt en egen byråtjänst (BLINK). Styrkan i det här argumentet beror på hur blandade byråernas portföljer är, och det måste mätas i Fas 0.
+
+5. **Spårbarhet som ingen annan har: ändrat efter godkännande + evidenskedja.**
+   Varje siffra spåras till verifikationen. Varje godkänd period låses, och **ändringar i efterhand upptäcks automatiskt** (verifikationer som lagts till, ändrats eller tagits bort efter att konsulten godkänt månaden).
+
+**Hygien (måste finnas, men säljer inte ensamt):** svenska kontroller, regelkatalog, skattekontoavstämning, Reko-export, PTL-signaler (som export till byråns KYC-verktyg), AI-kommentarer och kundmötesunderlag.
+
+#### Hur sårbar är differentieringen?
+| Skäl | Kan Fortnox kopiera för sina egna kunder? | Kan Fortnox kopiera för andra systems kunder? | Försvarbarhet |
+|---|---|---|---|
+| 1. Ärenden | Ja, 12–24 mån | Nej | Medel: försprång + kvalitet |
+| 2. Kundminne | Ja, funktionen | Nej, **inte byråns historik hos oss** | **Hög** över tid (data + inlåsning) |
+| 3. Kundfrågeloop | Ja | Nej | Låg–medel |
+| 4. Alla system, neutral | Nej | Nej | **Hög** om portföljerna är blandade |
+| 5. Ändrat efter godkännande | Ja | Nej | Medel |
+
+**Slutsats:** produkten blir något utöver det som finns genom att flytta enheten från *signal* till *ärende med minne*, över *alla system*. Enskilda kontroller eller en AI-chatt räcker inte som skäl.
+
+#### Stoppkriterier i Fas 0 (om hypoteserna inte håller)
+- Om pilotbyråerna har **> 85 % av kunderna i Fortnox och är nöjda med Insikter**, faller skäl 4. Då ska ärenden + kundminne bära produkten ensamma. Alternativ: **en app på Fortnox marknadsplats** som bygger just ärenden och minne ovanpå Fortnox data.
+- Om konsulterna inte upplever att **gruppering till ärenden sparar tid** jämfört med Insikter-listan: pröva i stället **bokslut/årsbokslut** som kil (färre tillfällen men högre värde per tillfälle).
+- Om ingen betalningsvilja ≥ 39 kr/klient/mån finns: stoppa eller byt kund (t.ex. större byråkedjor med egna kvalitetsavdelningar).
 
 ### 3.2 Kilen (MVP) – "Portföljgranskning"
 ```text
@@ -166,11 +211,17 @@ Periodmognad + fullständighet
    ↓
 Regelkatalog → deterministiska kontroller (med lagstöd och giltighet)
    ↓
-AI-triage (grupperar, förklarar, föreslår "troligen OK / utred")
+Kundminne: matcha mot tidigare bedömningar ("samma mönster som …")
    ↓
-Portföljvy: prioriterad lista över kunder
+Ärendebyggare (AI): grupperar relaterade fynd → ärende med rotorsak, evidens, föreslagen åtgärd
    ↓
-Konsult kvitterar fynd → periodanalys → kundmötesunderlag
+Portföljvy: prioriterad lista över kunder och ärenden
+   ↓
+Konsult beslutar per ärende (OK / åtgärda / fråga kund) → beslut sparas i kundminnet
+   ↓
+Kundfrågeloop: fråga → kundens svar + underlag hamnar på ärendet
+   ↓
+Periodanalys → kundmötesunderlag
    ↓
 Godkänn → låst snapshot → export (PDF/Word/Excel + Reko-dokumentation)
 ```
@@ -180,6 +231,7 @@ Godkänn → låst snapshot → export (PDF/Word/Excel + Reko-dokumentation)
 - Minst **50 % av High-fynden** leder till en åtgärd eller en fråga till kunden (precision).
 - **0 missade** kända fel i den kurerade testsviten (recall).
 - Minst 1 pilotbyrå med **blandad systemportfölj** (inte bara Fortnox) använder produkten varje vecka.
+- Median **≤ 5 ärenden per kund-månad** (i stället för en lång signallista), och ≥ 30 % av återkommande mönster får ett korrekt förslag från kundminnet.
 
 ---
 
@@ -191,7 +243,7 @@ Godkänn → låst snapshot → export (PDF/Word/Excel + Reko-dokumentation)
 | MVP | **SIE4-filuppladdning** | Samma | Gratis | Spiris, BL, Hogia, Bokio m.fl. **Massuppladdning** (zip med många filer, automatisk matchning mot klient via org.nr i `#ORGNR`) |
 | V1.5 | **Fortnox leverantörs- och kundfakturor** | Motpart, förfallodatum, betalstatus | Samma licens | Spend Intelligence, reskontraavstämning 1510/2440, åldersanalys |
 | V1.5 | **Spiris API** | SIE-motsvarande data + reskontra | ~69 kr/mån för kunden | Automatiserar den näst största källan |
-| V1.5 | **Skatteverket Skattekonto-API** | Saldo, transaktioner | Organisationscertifikat + ombudsbehörighet | Avstämning 1630 ↔ skattekonto, förfallna skatter |
+| V1.5 | **Skatteverket Skattekonto-API** | Saldo, transaktioner | Organisationscertifikat + ombudsbehörighet | Avstämning 1630 ↔ skattekonto. Hygien: Fortnox har redan en gratis koppling. Värdet ligger i icke-Fortnox-kunder och i att avvikelser blir ärenden |
 | V2 | Björn Lundén API, SIE 5, fakturadokument | | | |
 | V3 | Bank (PSD2), lön (AGI-underlag) | | | Undersök om Fortnox gratis bankkoppling exponeras via API |
 
@@ -277,6 +329,8 @@ Märkning: 🟰 = finns i någon form i Fortnox Insikter, 🆕 = inte listat dä
 - **V2:** ML-rangordning ovanpå reglerna (inte ersättning), tränad per byrå på dess egen feedback. Utvärderas med average precision.
 
 ### 5.3 PTL-signaler (V1.5, bakom behörigheten *PTL-ansvarig*)
+> **v3.1:** KYC och riskbedömning finns redan i Visma Advisor KYC och Lundify. Vi bygger **bara transaktionssignaler ur bokföringen** och exporterar dem (CSV/API) till byråns KYC-verktyg. Behovet är tydligt: länsstyrelsen gav 2022 sanktionsavgift till alla utom en av de granskade redovisningsbyråerna. Men det är ett tillägg, inte kärnan.
+
 - Deterministiska signaler ur bokföringen som kan kopplas till myndigheternas vägledning från 2025. Exempel: ovanligt stora kontantposter/kassasaldon, runda belopp mot närstående, snabba in- och utflöden utan affärslogik, betalningar till och från utländska motparter som avviker från verksamheten. **Den exakta signallistan tas fram tillsammans med en PTL-kunnig konsult utifrån vägledningen.**
 - Stöd för **kundriskbedömning**: bransch, bolagsform, kontantintensitet, förändringar i ägarstruktur (senare via Bolagsverket).
 - **Synlighet `RESTRICTED_AML`**: visas aldrig i kundrapport, kundmötesunderlag eller kundportal. AI-uppgifter för kundriktad text får aldrig se dem.
@@ -321,6 +375,22 @@ rule_definition, rate_table   -- se §5.1
 rule_precision_stat      -- per byrå × regel × månad
 -------------------
 organization_id, rule_code, findings, actioned, accepted_ok, suppressed
+
+case                     -- ärende: grupp av relaterade fynd (v3.1)
+----
+id, company_id, period, title, root_cause_hypothesis, claims JSONB (fact_ids),
+finding_ids[], status, decision, decided_by, decided_at, client_question_id
+
+resolution_memory        -- kundminne (v3.1)
+-----------------
+company_id, pattern_signature   -- regel + konto/motpart + beloppsintervall + periodicitet
+decision, rationale, evidence_refs, decided_by, decided_at, valid_until,
+times_reused, last_reused_at
+
+client_question          -- kundfrågeloop (v3.1)
+---------------
+id, company_id, case_id, text, sent_via (link|email|portal), token_hash, expires_at,
+answered_at, answer_text, attachments (object keys)
 
 aml_assessment           -- PTL, RESTRICTED
 --------------
@@ -390,9 +460,9 @@ Orkestreringen är kod (jobbkön). Varje uppgift har fast verktygsuppsättning, 
 | # | Uppgift | Fas | Input | Output | Verktyg | Modellnivå | Människa |
 |---|---|---|---|---|---|---|---|
 | A1 | **Mappningsassistent** | MVP | Kontonamn, BAS-intervall, exempeltexter, bransch | Legal rad + kategori + konfidens + motivering | – | Liten (batch) | Bekräftar. Blir byråmall |
-| A2 | **Granskningstriage** | MVP | Fynd + evidenspaket (verifikationer, kontohistorik, bokslutsmönster) | Sammanfattning, "troligen OK/utred/fråga kund", motivering med fact_ids | Läs: `get_voucher`, `get_account_history`, `get_similar_vouchers` | Mellan (batch) | Kan aldrig stänga fynd eller sänka High |
+| A2 | **Ärendebyggare** (triage + rotorsaksgruppering, v3.1) | MVP | Periodens fynd + evidenspaket (verifikationer, kontohistorik, bokslutsmönster) + **träffar i kundminnet** | Ärenden: grupperade fynd, rotorsakshypotes, "troligen OK/utred/fråga kund", motivering med fact_ids, hänvisning till tidigare beslut | Läs: `get_voucher`, `get_account_history`, `get_similar_vouchers`, `get_prior_resolutions` | Stark (batch) | Kan aldrig stänga fynd eller sänka High. Förslag från kundminnet kräver alltid kvittens |
 | A3 | **Periodanalytiker** | MVP | Förberäknat analyspaket inkl. mognad | Intern månadskommentar | – | Stark | Redigerar/godkänner |
-| A4 | **Kundmötesagent** | MVP | Bara `CLIENT_SAFE`-fakta + A3-utkast | 1-sidig sammanfattning + 3–7 frågor/råd | – | Stark | Godkänner. Aldrig autoutskick |
+| A4 | **Kundmötes- och frågeagent** | MVP | Bara `CLIENT_SAFE`-fakta + A3-utkast + ärenden markerade "fråga kund" | 1-sidig sammanfattning + 3–7 frågor/råd + **kundfrågor per ärende** i lättförståelig svenska | – | Stark | Godkänner. Aldrig autoutskick |
 | A5 | **Analytiker (Q&A)** | MVP-slut | Fråga + klientkontext | Claims | Läsverktyg (v1 §51) + `get_maturity`, `list_changes_since`, `explain_rule` | Stark | Budget: N verktygsanrop, M tokens |
 | V | **Granskare** | MVP | Output + paket | Pass/fail per claim | Regler + LLM-bedömning (kausalitet, internt i kundtext) | Mellan, annan leverantör/prompt än producenten om möjligt | Underkänt → en omgenerering → annars bortfiltrerat |
 | A6 | **Motpartsresolver** | V1.5 | Leverantörsnamn, org.nr, texter | Kanonisk motpart + kategori + konfidens | `search_counterparties` | Liten | Bekräftelse över väsentlighet |
@@ -509,6 +579,7 @@ Orkestreringen är kod (jobbkön). Varje uppgift har fast verktygsuppsättning, 
 - 3–5 pilotbyråer med biträdesavtal, minst en med blandad systemportfölj.
 - CLI: SIE4 → parser → 10 kontroller + RR/BR/R12 → Excel + 1-sidig PDF med AI-kommentar (fact_id-principen redan här). Manuell kvalitetssäkring och leverans varje månad.
 - Juristgranskning av Fortnox utvecklaravtal. Utred marknadsplatsmodell mot licens.
+- **Testa differentieringen:** gör för 2–3 pilotkunder en manuell ärendegruppering och jämför, sida vid sida med Fortnox Insikter-listan, hur lång tid konsulten behöver.
 - Evals av 2–3 AI-leverantörer i EU-region på pilotdata.
 - **Exit:**
   - ≥ 3 byråer anger betalningsvilja på en nivå.
@@ -531,12 +602,12 @@ Orkestreringen är kod (jobbkön). Varje uppgift har fast verktygsuppsättning, 
 10. De 25 kontrollerna, igenkänning av bokslutsmönster, fyndlivscykel, suppression, precisionsstatistik
 11. Klientvy med drilldown och Excel-export
 12. Portföljvy med prioriteringspoäng och kopplingshälsa
-13. A1 + A2 + granskare V + eval-svit + EU-leverantör med failover
+13. A1 + A2 (ärendebyggare) + kundminne + granskare V + eval-svit + EU-leverantör med failover
 - **Exit:** pilotkonsulterna granskar i produkten, High-precision ≥ 50 %, recall 100 % på testsviten.
 
 ### Fas 3 – Rådgivning, rapport, härdning (≈ 4–6 veckor)
 14. Variansbrygga, kategori-drilldown, budget mot utfall (#PBUDGET)
-15. A3 + A4 + rapporter (PDF/Word) + Reko-dokumentation
+15. A3 + A4 + rapporter (PDF/Word) + Reko-dokumentation + **kundfrågeloop** (säker länk)
 16. Snapshot + "ändrad efter godkännande"
 17. A5 Q&A med budget
 18. Revisionslogg, AI-märkning, CSP-härdning, penetrationstest
@@ -561,7 +632,8 @@ Orkestreringen är kod (jobbkön). Varje uppgift har fast verktygsuppsättning, 
 
 | Risk | Sannolikhet | Påverkan | Motåtgärd |
 |---|---|---|---|
-| Fortnox bygger ut Insikter till samma nivå | Hög | Hög | Systemoberoende, arbetsflöde, Reko/PTL, externa avstämningar. Fortnox kan inte vara neutral mot Spiris-kunder |
+| Fortnox bygger ut Insikter till samma nivå | Hög | Hög | Ärenden + **kundminne** (byråns historik hos oss kan inte kopieras) + alla system. Fortnox kan inte vara neutral mot Spiris-kunder. Stoppkriterier i §3.1 |
+| Differentieringen visar sig för svag (byråerna är nöjda med befintliga verktyg) | Medel | Kritisk | Fas 0 mäter detta först. Alternativ: marknadsplatsapp, bokslutskil eller stopp (§3.1) |
 | Fortnox ändrar API-villkor/priser eller nekar appen | Medel | Hög | SIE-filväg fullt fungerande. Juristgranskat avtal. Flera connectors |
 | Byråer vill inte betala utöver Fortnox gratisfunktioner | Medel | Hög | Fas 0 mäter betalningsvilja. Pris kopplat till sparad tid |
 | Falsklarm dödar användningen | Hög | Hög | Mognadsbedömning, bokslutsmönster, precision per regel, suppression |
@@ -585,6 +657,9 @@ Orkestreringen är kod (jobbkön). Varje uppgift har fast verktygsuppsättning, 
 8. Vad skulle ni betala per kund och månad för att korta genomgången med en tredjedel?
 9. Hur ser ni på AI-genererade texter mot kund? Vilka krav har ni på var data lagras (EU, svenskt, CLOUD Act)?
 10. Vem på byrån beslutar om nya verktyg, och hur går det till?
+11. När ni får flera larm för samma kund, hur ofta har de en gemensam orsak? Visa ett exempel.
+12. Hur förs kunskap om en kund vidare när en konsult slutar eller är ledig? Vad går förlorat?
+13. Hur ställer ni frågor till kunden och samlar in svar och underlag i dag? Hur lång tid tar det?
 
 ---
 
@@ -625,6 +700,12 @@ Orkestreringen är kod (jobbkön). Varje uppgift har fast verktygsuppsättning, 
 - AI Act art. 50: <https://artificialintelligenceact.eu/article/50/>, <https://www.cooley.com/news/insight/2026/2026-08-03-eu-ai-act-transparency-obligations-take-effect-2-august-2026>. Art. 4 efter Omnibus: <https://lawandtechnology.eu/en/ai-literacy-digital-omnibus-article-4-ai-act/>, <https://fpf.org/blog/the-ai-act-implementation-timeline-what-changes-under-the-ai-omnibus/>
 - Cybersäkerhetslagen: <https://pts.se/sakerhet-och-integritet/cybersakerhetslagen/>
 - CLOUD Act och DPF: <https://globaldatashield.com/blog/eu-us-data-privacy-framework-2026>
+
+**Befintliga byrå-, skattekonto- och PTL-verktyg (v3.1)**
+- Fortnox Skatteverket-koppling: <https://support.fortnox.se/produkthjalp/bokforing/koppla-ihop-skatteverket-med-fortnox>, JSI Skattekonto: <https://www.fortnox.se/integrationer/integration/jsi-skattekonto-ab/skattekonto>
+- Fortnox Byråstöd / Reko: <https://www.fortnox.se/integrationer/kategorier/byrastod>, WeSoft Byråstöd: <https://www.fortnox.se/integrationer/integration/tech-by-wesoft-ab/wesoft-byrastod>
+- Visma Advisor KYC: <https://www.visma.se/nyheter/nytt-verktyg-hjalper-redovisningsbyraer-motverka-penningtvatt-och-organiserad-brottslighet>, Lundify KYC/AML: <https://bjornlunden.com/se/juridik-kunskap/compliance-kyc-aml/>
+- Sanktionsavgifter vid PTL-tillsyn 2022: <https://www.finanslicenser.se/nyheter/penningtvatt/skydda-din-verksamhet/>
 
 **AI och säkerhet**
 - Claude data residency (inference_geo us/global): <https://platform.claude.com/docs/en/manage-claude/data-residency>
