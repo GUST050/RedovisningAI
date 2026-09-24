@@ -276,3 +276,11 @@ def test_client_question_flow_and_aml_block(world) -> None:  # type: ignore[no-u
     with tenant_session(world["admin_a"]) as s:
         q = s.get(m.ClientQuestion, row.id)
         assert q.status == "ANSWERED" and q.answer_text == "Det var ett förskott."
+
+
+def test_seed_demo_is_idempotent(database) -> None:  # type: ignore[no-untyped-def]
+    from redovisningai.db.bootstrap import seed_demo
+
+    first = seed_demo(owner_url=database)
+    second = seed_demo(owner_url=database)
+    assert first.org_id == second.org_id and first.admin_user_id == second.admin_user_id

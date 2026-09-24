@@ -100,14 +100,32 @@ def create_company(
         return c.id
 
 
+DEMO_ORG_NAME = "Demobyrån Redovisning AB"
+
+
 def seed_demo(as_of: date = date(2026, 10, 12), owner_url: str | None = None) -> CreatedOrg:
-    """Skapa en demobyrå med fyra kunder och importera genererad bokföring."""
+    """Skapa en demobyrå med fyra kunder och importera genererad bokföring.
+
+    Idempotent: finns demobyrån redan returneras den och inget skapas på nytt.
+    """
     from redovisningai.devdata.generator import DEMO_PROFILES, generate
+
+    engine = create_engine(owner_url or get_settings().database_url_owner)
+    with Session(engine) as s:
+        existing = s.execute(
+            select(m.Organization.id, m.AppUser.id)
+            .join(m.Membership, m.Membership.org_id == m.Organization.id)
+            .join(m.AppUser, m.AppUser.id == m.Membership.user_id)
+            .where(m.Organization.name == DEMO_ORG_NAME, m.AppUser.email == "anna@demobyran.se")
+        ).first()
+    engine.dispose()
+    if existing is not None:
+        return CreatedOrg(existing[0], existing[1])
     from redovisningai.jobs.pipeline import import_sie
     from redovisningai.sie.writer import write_sie4
 
     org = create_organization(
-        "Demobyrån Redovisning AB", "anna@demobyran.se", "Anna Konsult", org_number="559999-0001", owner_url=owner_url
+        DEMO_ORG_NAME, "anna@demobyran.se", "Anna Konsult", org_number="559999-0001", owner_url=owner_url
     )
     viewer = add_user(org.org_id, "lisa@demobyran.se", "Lisa Läsare", "VIEWER", owner_url=owner_url)
     admin_ctx = TenantContext(

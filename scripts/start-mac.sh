@@ -139,14 +139,14 @@ curl -fsS http://localhost:8000/health >/dev/null 2>&1 || {
 }
 ok "API:t svarar"
 
-# ------------------------------------------------------------------ 5. Demodata (bara första gången)
-if [ "$(curl -s -o /dev/null -w '%{http_code}' -H 'X-Dev-User: anna@demobyran.se' http://localhost:8000/api/me)" != "200" ]; then
-  say "Lägger in demobyrån med fyra kunder"
-  docker compose run --rm api redovisningai seed-demo
-  ok "Demodata klar"
-else
-  ok "Demodata finns redan"
-fi
+# ------------------------------------------------------------------ 5. Demodata
+# seed-demo är idempotent: finns demobyrån redan händer inget.
+say "Säkerställer demobyrån (anna@demobyran.se)"
+docker compose run --rm api redovisningai seed-demo ||
+  fail "Demodata kunde inte läggas in. Klistra in raderna ovan i chatten."
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H 'X-Dev-User: anna@demobyran.se' http://localhost:8000/api/me)" = "200" ] ||
+  fail "Inloggningen för anna@demobyran.se fungerar inte. Klistra in raderna ovan i chatten."
+ok "Demobyrån finns"
 
 printf "Väntar på webben"
 for _ in $(seq 1 60); do
