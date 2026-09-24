@@ -326,3 +326,28 @@ def test_eval_suite_passes_with_fake_provider() -> None:
     failed = [r.to_dict() for r in results if not r.passed]
     assert not failed, failed
     assert {r.task for r in results} == {"A1", "A2", "A3", "A4"}
+
+
+def test_rule_based_fallbacks_survive_verification() -> None:
+    """Reservtexterna (utan AI) måste klara verifieraren, annars blir svaret tomt."""
+    service = AIService(None)
+    brief = service.run(
+        "A7",
+        {
+            "companies": [
+                {
+                    "name": "Bygg & Co AB",
+                    "score": 80,
+                    "reasons": [{"code": "high", "points": 30, "text": "6 allvarliga fynd"}],
+                }
+            ],
+            "allowed": [],
+        },
+        FactStore(),
+        org_id="o",
+        allowed_identifiers={"Bygg & Co AB"},
+    )
+    assert brief.source == "rules"
+    assert [c["text"] for c in brief.data["claims"]] == ["Bygg & Co AB: 6 allvarliga fynd."]
+    ask = service.run("A5", {"question": "Varför?"}, FactStore(), org_id="o")
+    assert ask.data["claims"]

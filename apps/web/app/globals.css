@@ -1,0 +1,31 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink: #1d2733;
+  --color-muted: #5b6776;
+  --color-line: #dfe4ea;
+  --color-panel: #ffffff;
+  --color-canvas: #f4f6f8;
+  --color-brand: #1f4e79;
+  --color-brand-soft: #e7eef6;
+  --color-high: #b42318;
+  --color-high-soft: #fdecea;
+  --color-medium: #b54708;
+  --color-medium-soft: #fef3e6;
+  --color-low: #475467;
+  --color-low-soft: #eef1f4;
+  --color-ok: #067647;
+  --color-ok-soft: #e7f6ee;
+  --color-ai: #6941c6;
+  --color-ai-soft: #f1edfb;
+  --font-sans: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+
+html, body { background: var(--color-canvas); color: var(--color-ink); }
+body { font-size: 14px; line-height: 1.45; }
+.num { font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; }
+table.data { width: 100%; border-collapse: collapse; }
+table.data th { text-align: left; font-weight: 600; color: var(--color-muted); font-size: 12px; padding: 8px 10px; border-bottom: 1px solid var(--color-line); background: #fafbfc; position: sticky; top: 0; }
+table.data td { padding: 8px 10px; border-bottom: 1px solid var(--color-line); vertical-align: top; }
+table.data tr:hover td { background: #fafcff; }
+.focus-ring:focus-visible { outline: 2px solid var(--color-brand); outline-offset: 2px; }

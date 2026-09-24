@@ -212,6 +212,7 @@ class CompanyAnalysis:
                 for y in self.ledger.years
             ],
             "months_with_data": [m.isoformat() for m in self.index.months_with_data()],
+            "latest_month": (lm.spec if (lm := self.latest_month()) else None),
         }
 
     def statements(self, period: Period, compare: Period | None) -> dict[str, Any]:
@@ -223,6 +224,23 @@ class CompanyAnalysis:
     def cost_tree(self, period: Period, compare: Period | None) -> dict[str, Any]:
         names = {a: acc.name for a, acc in self.ledger.accounts.items()}
         return cost_tree(self.index, period, compare, self.ctx.category_mapping).to_dict(names)
+
+    # ------------------------------------------------------------------ trend
+    def trend(self, months: int = 24) -> dict[str, Any]:
+        """Månadsserie för diagram: omsättning, rörelsens kostnader och rörelseresultat (t.o.m. senaste månaden)."""
+        last = self.index.latest_month_with_data()
+        if last is None:
+            return {"months": [], "net_sales": [], "costs": [], "operating_result": []}
+        ms = [*self.index.history_months(last, months - 1), last]
+        sales = [-x for x in self.index.monthly_series(AccountSet.of((3000, 3799)), ms)]
+        costs = self.index.monthly_series(AccountSet.of((4000, 7999)), ms)
+        other_income = [-x for x in self.index.monthly_series(AccountSet.of((3800, 3999)), ms)]
+        return {
+            "months": [m.isoformat()[:7] for m in ms],
+            "net_sales": [str(x) for x in sales],
+            "costs": [str(x) for x in costs],
+            "operating_result": [str(a + o - c) for a, o, c in zip(sales, other_income, costs, strict=True)],
+        }
 
     # ------------------------------------------------------------------ förklara
     def explain(

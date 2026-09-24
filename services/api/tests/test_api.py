@@ -225,3 +225,35 @@ def test_bulk_import_matches_by_orgnr(env) -> None:  # type: ignore[no-untyped-d
         "/api/imports/bulk", headers=H("admin@api.se"), files={"file": ("filer.zip", buf.getvalue(), "application/zip")}
     ).json()
     assert r["results"][0]["status"] == "no_match"
+
+
+def test_trend_and_voucher_lookup_per_fiscal_year(env) -> None:  # type: ignore[no-untyped-def]
+    c, cid = env["client"], env["cid"]
+    t = c.get(f"/api/companies/{cid}/trend?months=12", headers=H("kalle@api.se")).json()
+    assert len(t["months"]) == 12 and t["months"][-1] == "2026-10"
+    assert len(t["net_sales"]) == len(t["costs"]) == len(t["operating_result"]) == 12
+    # Verifikationsnummer börjar om varje år: A1 finns både 2025 och 2026.
+    v25 = c.get(f"/api/companies/{cid}/vouchers/A1?period=2025-03", headers=H("kalle@api.se")).json()
+    v26 = c.get(f"/api/companies/{cid}/vouchers/A1?on=2026-03-01", headers=H("kalle@api.se")).json()
+    assert v25["date"].startswith("2025") and v26["date"].startswith("2026")
+    latest = c.get(f"/api/companies/{cid}/vouchers/A1", headers=H("kalle@api.se")).json()
+    assert latest["date"].startswith("2026")
+
+
+def test_period_detail_and_unapproved_meeting_not_in_client_report(env) -> None:  # type: ignore[no-untyped-def]
+    c, cid = env["client"], env["cid"]
+    c.post(f"/api/companies/{cid}/periods/2026-09/meeting", headers=H("kalle@api.se"))
+    d = c.get(f"/api/companies/{cid}/periods/2026-09", headers=H("kalle@api.se")).json()
+    assert d["client_report"]["approved"] is False
+    c.put(
+        f"/api/companies/{cid}/periods/2026-09/meeting",
+        json={"summary": ["HEMLIGT_UTKAST"], "questions": [], "approve": False},
+        headers=H("kalle@api.se"),
+    )
+    r = c.get(f"/api/companies/{cid}/reports/client?period=2026-09&format=docx", headers=H("kalle@api.se"))
+    assert r.status_code == 200
+    import docx  # type: ignore[import-untyped]
+
+    text = "\n".join(p.text for p in docx.Document(io.BytesIO(r.content)).paragraphs)
+    assert "HEMLIGT_UTKAST" not in text
+    assert c.get(f"/api/companies/{cid}/periods/1999-01", headers=H("kalle@api.se")).status_code == 404

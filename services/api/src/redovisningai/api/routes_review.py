@@ -233,6 +233,26 @@ def periods(company_id: uuid.UUID, s: Session = Depends(db)) -> list[dict[str, A
     ]
 
 
+@router.get("/periods/{period}")
+def period_detail(company_id: uuid.UUID, period: str, s: Session = Depends(db)) -> dict[str, Any]:
+    get_company(s, company_id)
+    r = s.scalar(select(m.PeriodReview).where(m.PeriodReview.company_id == company_id, m.PeriodReview.period == period))
+    if r is None:
+        raise HTTPException(404, "Perioden har inte granskats")
+    return {
+        "period": r.period,
+        "status": r.status,
+        "maturity": r.maturity,
+        "approved_by": r.approved_by,
+        "approved_at": r.approved_at.isoformat() if r.approved_at else None,
+        "reported_at": r.reported_at.isoformat() if r.reported_at else None,
+        "override_note": (r.snapshot or {}).get("override_note"),
+        "changes": r.changes,
+        "commentary": r.commentary,
+        "client_report": r.client_report,
+    }
+
+
 class ApproveIn(BaseModel):
     override_note: str | None = Field(default=None, max_length=2000)
 

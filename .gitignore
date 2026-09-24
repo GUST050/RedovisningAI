@@ -17,3 +17,5 @@ out/
 .env.local
 var/
 *.log
+*.tsbuildinfo
+next-env.d.ts

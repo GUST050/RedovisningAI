@@ -52,11 +52,13 @@ def score(inp: PortfolioInputs, today: date | None = None) -> PriorityScore:
     today = today or date.today()
     parts: list[tuple[str, int, str]] = []
     if inp.open_high:
-        parts.append(("high", inp.open_high * WEIGHTS["high"], f"{inp.open_high} High-fynd"))
+        parts.append(("high", inp.open_high * WEIGHTS["high"], f"{inp.open_high} allvarliga fynd"))
     if inp.open_medium:
-        parts.append(("medium", inp.open_medium * WEIGHTS["medium"], f"{inp.open_medium} Medium-fynd"))
+        parts.append(
+            ("medium", inp.open_medium * WEIGHTS["medium"], f"{inp.open_medium} fynd med medelhög allvarlighet")
+        )
     if inp.open_low:
-        parts.append(("low", min(inp.open_low, 10) * WEIGHTS["low"], f"{inp.open_low} Low-fynd"))
+        parts.append(("low", min(inp.open_low, 10) * WEIGHTS["low"], f"{inp.open_low} mindre fynd"))
     if inp.changed_after_approval:
         parts.append(("changed_after_approval", WEIGHTS["changed_after_approval"], "Ändrad efter godkännande"))
     if inp.margin_change_pp is not None and inp.margin_change_pp <= Decimal("-5"):

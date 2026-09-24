@@ -547,6 +547,7 @@ behöver uppmärksamhet och varför, utifrån prioriteringspoäng och skäl. Nä
             if not c.get("reasons"):
                 continue
             reasons = ", ".join(r["text"].lower() for r in c["reasons"][:2])
+            # HYPOTHESIS: verifieraren kräver fakta-id för OBSERVATION, och skälen är inga beräknade fakta.
             claims.append({"type": "HYPOTHESIS", "text": f"{c['name']}: {reasons}.", "fact_ids": []})
         return {"claims": claims}
 

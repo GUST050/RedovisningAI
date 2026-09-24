@@ -89,7 +89,7 @@ def approve_period(
     if (open_high or pr.status == "PRELIMINARY") and not (override_note and override_note.strip()):
         reasons = []
         if open_high:
-            reasons.append(f"{len(open_high)} öppna High-fynd")
+            reasons.append(f"{len(open_high)} öppna fynd med hög allvarlighet")
         if pr.status == "PRELIMINARY":
             reasons.append("perioden är preliminär")
         raise WorkflowError("Kan inte godkänna: " + ", ".join(reasons) + ". Ange motivering för att överstyra.")

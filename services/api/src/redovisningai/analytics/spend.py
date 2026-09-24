@@ -183,6 +183,9 @@ def spend_report(
     last12 = [m for m in months if m > add_months(month_start(period.end), -12)]
     rows = []
     total = sum((cs.total(cur_m) for cs in spend.values()), ZERO)
+    # Andelar räknas mot summan av motparter med kostnad (krediteringar/negativa belopp exkluderas),
+    # annars kan andelarna tillsammans bli över 100 %.
+    gross = sum((t for cs in spend.values() if (t := cs.total(cur_m)) > 0), ZERO)
     compare_total = sum((cs.total(cmp_m) for cs in spend.values()), ZERO)
     recurring_amount = ZERO
     new_costs, disappeared, shifts = [], [], []
@@ -202,7 +205,7 @@ def spend_report(
             "amount": str(cur),
             "compare": str(prev),
             "diff": str(cur - prev),
-            "share": str((cur / total * 100).quantize(Decimal("0.1"))) if total else None,
+            "share": str((cur / gross * 100).quantize(Decimal("0.1"))) if gross and cur > 0 else None,
             "recurrence": rec.value,
             "recurrence_sv": RECURRENCE_SV[rec],
             "annualized": None if annualized is None else str(annualized),
@@ -235,7 +238,7 @@ def spend_report(
     positive = sorted((Decimal(r["amount"]) for r in rows if Decimal(r["amount"]) > 0), reverse=True)
     conc = {}
     for n in (1, 5, 10):
-        conc[f"top{n}"] = str((sum(positive[:n], ZERO) / total * 100).quantize(Decimal("0.1"))) if total else "0"
+        conc[f"top{n}"] = str((sum(positive[:n], ZERO) / gross * 100).quantize(Decimal("0.1"))) if gross else "0"
     new_costs.sort(key=lambda r: Decimal(r["amount"]), reverse=True)
     disappeared.sort(key=lambda r: Decimal(r["compare"]), reverse=True)
     return SpendReport(
@@ -248,5 +251,5 @@ def spend_report(
         disappeared=disappeared[:limit],
         level_shifts=shifts,
         concentration=conc,
-        recurring_share=(recurring_amount / total * 100).quantize(Decimal("0.1")) if total else None,
+        recurring_share=(recurring_amount / gross * 100).quantize(Decimal("0.1")) if gross else None,
     )

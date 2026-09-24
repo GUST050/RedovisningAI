@@ -306,6 +306,13 @@ def cost_tree(
     return a.cost_tree(p, c)
 
 
+@router.get("/trend")
+def trend(
+    company_id: uuid.UUID, months: int = Query(default=24, ge=3, le=60), principal: Principal = Depends(get_principal)
+) -> dict[str, Any]:
+    return load_analysis(principal, company_id).trend(months)
+
+
 @router.get("/explain")
 def explain(
     company_id: uuid.UUID,
@@ -425,11 +432,27 @@ def transactions(
 
 
 @router.get("/vouchers/{key}")
-def voucher(company_id: uuid.UUID, key: str, principal: Principal = Depends(get_principal)) -> dict[str, Any]:
+def voucher(
+    company_id: uuid.UUID,
+    key: str,
+    period: str | None = None,
+    on: date | None = None,
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """Verifikationsnummer börjar om varje räkenskapsår. `on` (datum) eller `period` avgör året;
+    utan dem används det senaste året där numret finns."""
     a = load_analysis(principal, company_id)
-    for v in a.ledger.all_vouchers():
-        if str(v.key) == key:
-            return voucher_view(v, a.ledger, include_payroll_rows=principal.can_payroll)
+    anchor = on
+    if anchor is None and period:
+        anchor = _period(a, period).end
+    years = list(reversed(a.ledger.years))
+    if anchor is not None:
+        fy = a.ledger.year_for(anchor)
+        years = ([fy] if fy else []) + [y for y in years if y is not fy]
+    for y in years:
+        for v in y.vouchers:
+            if str(v.key) == key:
+                return voucher_view(v, a.ledger, include_payroll_rows=principal.can_payroll)
     raise HTTPException(404, "Verifikationen finns inte")
 
 

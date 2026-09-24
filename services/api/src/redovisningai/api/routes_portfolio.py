@@ -157,6 +157,8 @@ def create_company(
 
 
 class CompanySettingsIn(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    org_number: str | None = Field(default=None, max_length=20)
     legal_form: str | None = None
     industry: str | None = None
     vat_period: str | None = Field(default=None, pattern="^(month|quarter|year)$")

@@ -78,7 +78,7 @@ class TaxReconciliation:
             "unmatched_skv": [
                 {"date": t.date.isoformat(), "text": t.text, "amount": str(t.amount)} for t in self.unmatched_skv
             ],
-            "unmatched_book": self.unmatched_book,
+            "unmatched_book": [{**r, "date": str(r["date"]), "amount": str(r["amount"])} for r in self.unmatched_book],
         }
 
 

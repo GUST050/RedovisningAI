@@ -68,7 +68,8 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     stmts = analysis.statements(period, compare)
     findings = [r.to_dict() for r in review.records if r.visibility.value != "RESTRICTED_AML" or args.include_aml]
     cases = [c.to_dict() for c in review.cases if c.visibility.value != "RESTRICTED_AML" or args.include_aml]
-    sheets = statements_tables(stmts) + [
+    sheets = [
+        *statements_tables(stmts),
         (
             "Ärenden",
             Table(

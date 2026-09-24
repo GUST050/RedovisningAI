@@ -141,7 +141,8 @@ def report_client(
     pr = s.scalar(
         select(m.PeriodReview).where(m.PeriodReview.company_id == company_id, m.PeriodReview.period == period)
     )
-    meeting = (pr.client_report or {}).get("data") if pr and pr.client_report else None
+    # Bara ett av konsulten godkänt mötesunderlag får följa med till kunden.
+    meeting = pr.client_report.get("data") if pr and pr.client_report and pr.client_report.get("approved") else None
     doc = client_report(
         a.overview(p), a.statements(p, same_period_previous_year(p, a.ledger)), meeting, principal.org_name
     )
