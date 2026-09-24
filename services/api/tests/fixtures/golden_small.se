@@ -1,0 +1,68 @@
+#FLAGGA 0
+#PROGRAM "Handskriven testfil" 1.0
+#FORMAT PC8
+#GEN 20260131
+#SIETYP 4
+#FNAMN "Golden Test AB"
+#ORGNR 556000-0001
+#FTYP AB
+#RAR 0 20260101 20261231
+#RAR -1 20250101 20251231
+#KONTO 1510 "Kundfordringar"
+#KTYP 1510 T
+#KONTO 1930 "Företagskonto"
+#KTYP 1930 T
+#KONTO 2081 "Aktiekapital"
+#KTYP 2081 S
+#KONTO 2091 "Balanserad vinst"
+#KTYP 2091 S
+#KONTO 2440 "Leverantörsskulder"
+#KTYP 2440 S
+#KONTO 2611 "Utgående moms 25 %"
+#KTYP 2611 S
+#KONTO 2641 "Ingående moms"
+#KTYP 2641 T
+#KONTO 3001 "Försäljning 25 %"
+#KTYP 3001 I
+#KONTO 5010 "Lokalhyra"
+#KTYP 5010 K
+#KONTO 6110 "Kontorsmateriel"
+#KTYP 6110 K
+#KONTO 7210 "Löner tjänstemän"
+#KTYP 7210 K
+#DIM 1 "Kostnadsställe"
+#OBJEKT 1 "10" "Stockholm"
+#IB 0 1930 100000.00
+#IB 0 2081 -25000.00
+#IB 0 2091 -75000.00
+#UB -1 1930 100000.00
+#UB -1 2081 -25000.00
+#UB -1 2091 -75000.00
+#RES -1 3001 -500000.00
+#RES -1 5010 120000.00
+#PSALDO 0 202601 3001 {} -40000.00
+#PBUDGET 0 202601 3001 {} -45000.00
+#VER A 1 20260105 "Kundfaktura \"Kund 1\""
+{
+   #TRANS 1510 {} 50000.00
+   #TRANS 3001 {1 "10"} -40000.00 20260105 "Konsulttjänst"
+   #TRANS 2611 {} -10000.00
+}
+#VER A 2 20260110 "Hyra januari" 20260111
+{
+   #TRANS 5010 {} 20000.00
+   #TRANS 2641 {} 5000.00
+   #TRANS 2440 {} -25000.00
+}
+#VER A 3 20260125 "Lön"
+{
+   #TRANS 7210 {} 30000.00
+   #TRANS 1930 {} -30000.00
+}
+#VER A 4 20260128 "Kontorsmaterial rättad"
+{
+   #BTRANS 6110 {} 500.00 20260128 "Fel belopp"
+   #RTRANS 6110 {} 400.00 20260128 "Rätt belopp"
+   #TRANS 6110 {} 400.00 20260128 "Rätt belopp"
+   #TRANS 1930 {} -400.00
+}

@@ -1,0 +1,452 @@
+# Regelkatalog. Varje regel har lagstöd, giltighet, ägare och standardparametrar.
+# Byråer kan justera parametrar (trösklar, kontolistor) – aldrig lagstöd eller giltighet.
+# Ändringar här ska granskas av domänexpert och ge ny version.
+#
+# severity: HIGH | MEDIUM | LOW
+# visibility: INTERNAL | CLIENT_SAFE | RESTRICTED_AML
+# category: integrity | timing | vat | payroll | balance | company_law | pattern | trend | aml
+# applies_to: juridiska former regeln gäller (tom = alla)
+
+[[rule]]
+code = "UNBALANCED_VOUCHER"
+version = "1"
+category = "integrity"
+title = "Verifikation balanserar inte"
+description = "Summan av debet och kredit i en verifikation är inte noll."
+legal_basis = "BFL 5 kap. 1 § (dubbel bokföring), BFNAR 2013:2"
+valid_from = "2000-01-01"
+severity = "HIGH"
+visibility = "INTERNAL"
+owner = "domänexpert"
+reviewed_at = "2026-09-24"
+[rule.params]
+tolerance = "0.00"
+
+[[rule]]
+code = "IB_NE_PREV_UB"
+version = "1"
+category = "integrity"
+title = "Ingående balans stämmer inte med föregående års utgående"
+description = "IB för räkenskapsåret avviker från UB föregående år (eget kapital jämförs som grupp efter resultatdisposition)."
+legal_basis = "BFL 6 kap. 1 §, ÅRL 2 kap. (kontinuitet)"
+valid_from = "2000-01-01"
+severity = "HIGH"
+visibility = "INTERNAL"
+owner = "domänexpert"
+reviewed_at = "2026-09-24"
+[rule.params]
+tolerance = "1.00"
+
+[[rule]]
+code = "VOUCHER_NUMBER_GAP"
+version = "1"
+category = "integrity"
+title = "Lucka eller dubblett i verifikationsnumreringen"
+description = "Verifikationsnummer ska löpa i obruten följd inom varje serie."
+legal_basis = "BFL 5 kap. 6–7 §§, BFNAR 2013:2 kap. 5"
+valid_from = "2000-01-01"
+severity = "MEDIUM"
+visibility = "INTERNAL"
+owner = "domänexpert"
+reviewed_at = "2026-09-24"
+
+[[rule]]
+code = "LATE_BOOKING"
+version = "1"
+category = "timing"
+title = "Sent bokförd affärshändelse"
+description = "Kontanta betalningar ska bokföras senast påföljande arbetsdag, övriga affärshändelser så snart det kan ske."
+legal_basis = "BFL 5 kap. 2 §, BFNAR 2013:2 p. 3.1 och 3.3"
+valid_from = "2000-01-01"
+severity = "LOW"
+visibility = "INTERNAL"
+owner = "domänexpert"
+reviewed_at = "2026-09-24"
+[rule.params]
+cash_max_days = 3
+other_max_days = 45
+
+[[rule]]
+code = "CHANGED_AFTER_APPROVAL"
+version = "1"
+category = "integrity"
+title = "Bokföringen ändrad efter godkännande"
+description = "Verifikationer har lagts till, ändrats eller tagits bort i en period som redan godkänts."
+legal_basis = "Reko 140 (dokumentation), byråns kvalitetsrutiner"
+valid_from = "2000-01-01"
+severity = "HIGH"
+visibility = "INTERNAL"
+owner = "domänexpert"
+reviewed_at = "2026-09-24"
+
+[[rule]]
+code = "ACCOUNT_NOT_IN_CHART"
+version = "1"
+category = "integrity"
+title = "Konto saknas i kontoplanen"
+description = "Konto används i bokföringen men finns inte i kontoplanen, eller ligger utanför BAS-intervallen."
+legal_basis = "BFNAR 2013:2 (kontoplan som del av systemdokumentation)"
+valid_from = "2000-01-01"
+severity = "MEDIUM"
+visibility = "INTERNAL"
+owner = "domänexpert"
+reviewed_at = "2026-09-24"
+
+[[rule]]
+code = "ABNORMAL_SIGN"
+version = "1"
+category = "balance"
+title = "Onormalt saldo"
+description = "Konto har ett saldo med tecken som inte är rimligt, t.ex. negativ kassa eller tillgång med kreditsaldo."
+legal_basis = "God redovisningssed"
+valid_from = "2000-01-01"
+severity = "MEDIUM"
+visibility = "INTERNAL"
+owner = "domänexpert"
+reviewed_at = "2026-09-24"
+
+[[rule]]
+code = "INPUT_VAT_RATIO"
+version = "1"
+category = "vat"
+title = "Ingående moms stämmer inte med kostnaden"
+description = "Ingående moms i verifikationen motsvarar ingen giltig momssats, eller har dragits på en momsfri kostnad."
+legal_basis = "Mervärdesskattelagen (2023:200) 9 kap. (tillåtna satser), 13 kap. (avdragsrätt)"
+valid_from = "2000-01-01"
+severity = "MEDIUM"
+visibility = "CLIENT_SAFE"
+owner = "domänexpert"
+reviewed_at = "2026-09-24"
+[rule.params]
+exempt_accounts = ["6300-6399", "6570", "7000-7699", "8400-8499"]
+tolerance_pp = "0.6"
+
+[[rule]]
+code = "VAT_ACCOUNTS_NOT_CLEARED"
+version = "1"
+category = "vat"
+title = "Momskonton inte nollställda efter momsperioden"
+description = "Momskonton (2610–2649) har saldo efter att momsperioden avslutats – momsredovisningen kan vara ofullständig."
+legal_basis = "Skatteförfarandelagen 26 kap. (momsdeklaration)"
+valid_from = "2000-01-01"
+severity = "MEDIUM"
+visibility = "CLIENT_SAFE"
+owner = "domänexpert"
+reviewed_at = "2026-09-24"
+[rule.params]
+tolerance = "100.00"
+grace_days = 20
+
+[[rule]]
+code = "OUTPUT_VAT_RATIO"
+version = "1"
+category = "vat"
+title = "Utgående moms stämmer inte med försäljningen"
+description = "Utgående moms motsvarar ingen giltig momssats, eller fel sats används för datumet (t.ex. livsmedel 6 % fr.o.m. 2026-04-01)."
+legal_basis = "Mervärdesskattelagen (2023:200) 9 kap.; tillfälligt sänkt livsmedelsmoms 2026-04-01–2027-12-31"
+valid_from = "2000-01-01"
+severity = "MEDIUM"
+visibility = "CLIENT_SAFE"
+owner = "domänexpert"
+reviewed_at = "2026-09-24"
+[rule.params]
+tolerance_pp = "0.6"
+
+[[rule]]
+code = "PAYROLL_TAX_NOT_CLEARED"
+version = "1"
+category = "payroll"
+title = "Personalskatt eller arbetsgivaravgifter nollas inte"
+description = "Skulden på 2710/2730 är större än månadens avdrag – tidigare månaders skatter kan vara obetalda eller felbokade."
+legal_basis = "Skatteförfarandelagen 26 kap. (arbetsgivardeklaration), 62 kap. (betalning)"
+valid_from = "2000-01-01"
+severity = "MEDIUM"
+visibility = "CLIENT_SAFE"
+owner = "domänexpert"
+reviewed_at = "2026-09-24"
+[rule.params]
+tolerance_share = "0.05"
+tolerance_min = "1000.00"
+
+[[rule]]
+code = "EMPLOYER_CONTRIBUTION_RATIO"
+version = "1"
+category = "payroll"
+title = "Arbetsgivaravgifter stämmer inte mot lönerna"
+description = "Arbetsgivaravgifter i förhållande till bruttolön avviker från kundens normala nivå eller från gällande satser."
+legal_basis = "Socialavgiftslagen (2000:980); tillfälligt sänkt avgift för unga 2026-04-01–2027-09-30"
+valid_from = "2000-01-01"
+severity = "MEDIUM"
+visibility = "CLIENT_SAFE"
+owner = "domänexpert"
+reviewed_at = "2026-09-24"
+[rule.params]
+max_deviation_pp = "3.0"
+
+[[rule]]
+code = "TAX_ACCOUNT_BALANCE"
+version = "1"
+category = "balance"
+title = "Skattekontot (1630) har saldo"
+description = "Avräkningskontot för skattekontot har ett saldo som bör stämmas av mot Skatteverket."
+legal_basis = "Skatteförfarandelagen 61 kap. (skattekonto)"
+valid_from = "2000-01-01"
+severity = "LOW"
+visibility = "CLIENT_SAFE"
+owner = "domänexpert"
+reviewed_at = "2026-09-24"
+[rule.params]
+tolerance = "10000.00"
+
+[[rule]]
+code = "SUSPENSE_ACCOUNT_BALANCE"
+version = "1"
+category = "balance"
+title = "Saldo på OBS-/hängkonto"
+description = "Konto för oklara poster har kvarstående saldo som behöver utredas."
+legal_basis = "God redovisningssed"
+valid_from = "2000-01-01"
+severity = "MEDIUM"
+visibility = "INTERNAL"
+owner = "domänexpert"
+reviewed_at = "2026-09-24"
+[rule.params]
+accounts = []
+name_pattern = "(\\bobs\\b|hängkonto|oklar|okänd|felkonto|ofördelad|oidentifierad)"
+tolerance = "1.00"
+
+[[rule]]
+code = "ASSETS_WITHOUT_DEPRECIATION"
+version = "1"
+category = "balance"
+title = "Inventarier utan avskrivningar"
+description = "Bolaget har avskrivningsbara anläggningstillgångar men inga avskrivningar är bokade för perioden."
+legal_basis = "ÅRL 4 kap. 4 §, K2 kap. 10 / K3 kap. 17"
+valid_from = "2000-01-01"
+severity = "MEDIUM"
+visibility = "CLIENT_SAFE"
+owner = "domänexpert"
+reviewed_at = "2026-09-24"
+[rule.params]
+months_missing = 2
+
+[[rule]]
+code = "VACATION_LIABILITY_STATIC"
+version = "1"
+category = "balance"
+title = "Semesterlöneskulden ändras inte"
+description = "Semesterlöneskulden (2920) har inte förändrats trots löneutbetalningar."
+legal_basis = "Semesterlagen; god redovisningssed (periodisering)"
+valid_from = "2000-01-01"
+severity = "LOW"
+visibility = "CLIENT_SAFE"
+owner = "domänexpert"
+reviewed_at = "2026-09-24"
+[rule.params]
+months = 3
+
+[[rule]]
+code = "TAX_ALLOCATION_RESERVE_DUE"
+version = "1"
+category = "balance"
+title = "Periodiseringsfond ska återföras"
+description = "Periodiseringsfond ska återföras senast det sjätte beskattningsåret efter avsättningen."
+legal_basis = "Inkomstskattelagen 30 kap. 7 §"
+valid_from = "2000-01-01"
+severity = "MEDIUM"
+visibility = "CLIENT_SAFE"
+owner = "domänexpert"
+reviewed_at = "2026-09-24"
+
+[[rule]]
+code = "NEGATIVE_BANK"
+version = "1"
+category = "balance"
+title = "Negativt banksaldo"
+description = "Bankkontot har negativt saldo vid periodens slut utan känd checkkredit."
+legal_basis = "God redovisningssed (avstämning)"
+valid_from = "2000-01-01"
+severity = "MEDIUM"
+visibility = "CLIENT_SAFE"
+owner = "domänexpert"
+reviewed_at = "2026-09-24"
+
+[[rule]]
+code = "RELATED_PARTY_RECEIVABLE"
+version = "1"
+category = "company_law"
+title = "Fordran på delägare eller närstående – kontrollera låneförbudet"
+description = "Bolaget har en fordran på delägare, styrelseledamot, VD eller närstående. Kan vara ett förbjudet lån."
+legal_basis = "ABL 21 kap. 1 § (låneförbud), 30 kap. 1 §"
+valid_from = "2006-01-01"
+severity = "HIGH"
+visibility = "CLIENT_SAFE"
+applies_to = ["AB"]
+owner = "domänexpert"
+reviewed_at = "2026-09-24"
+[rule.params]
+min_amount = "1000.00"
+
+[[rule]]
+code = "EQUITY_BELOW_HALF_SHARE_CAPITAL"
+version = "1"
+category = "company_law"
+title = "Eget kapital under halva aktiekapitalet – indikator för kontrollbalansräkning"
+description = "Justerat eget kapital understiger hälften av registrerat aktiekapital. Indikator – inte en juridisk bedömning. OBS: SOU 2023:34 föreslår att reglerna slopas; följ lagstiftningen."
+legal_basis = "ABL 25 kap. 13–14 §§ (förslag om avskaffande i SOU 2023:34)"
+valid_from = "2006-01-01"
+severity = "HIGH"
+visibility = "CLIENT_SAFE"
+applies_to = ["AB"]
+owner = "domänexpert"
+reviewed_at = "2026-09-24"
+
+[[rule]]
+code = "DUPLICATE_CANDIDATE"
+version = "1"
+category = "pattern"
+title = "Möjlig dubbelbokning"
+description = "Två verifikationer med samma belopp, konto och liknande text nära i tid."
+legal_basis = "God redovisningssed"
+valid_from = "2000-01-01"
+severity = "HIGH"
+visibility = "CLIENT_SAFE"
+owner = "domänexpert"
+reviewed_at = "2026-09-24"
+[rule.params]
+min_amount = "1000.00"
+max_days = 14
+min_text_similarity = "0.8"
+
+[[rule]]
+code = "LARGE_MANUAL_POSTING"
+version = "1"
+category = "pattern"
+title = "Stor manuell post nära periodslut"
+description = "Manuell verifikation med stort belopp nära periodens slut som inte är en rutinpost."
+legal_basis = "God redovisningssed; ISA 240 (journal entry testing) som inspiration"
+valid_from = "2000-01-01"
+severity = "MEDIUM"
+visibility = "INTERNAL"
+owner = "domänexpert"
+reviewed_at = "2026-09-24"
+[rule.params]
+manual_series = ["A"]
+days_before_end = 3
+min_amount = "100000.00"
+
+[[rule]]
+code = "RAPID_REVERSAL"
+version = "1"
+category = "pattern"
+title = "Bokning som återförs direkt"
+description = "En verifikation motbokas helt inom kort tid (utöver normala periodiseringsåterföringar)."
+legal_basis = "God redovisningssed"
+valid_from = "2000-01-01"
+severity = "MEDIUM"
+visibility = "INTERNAL"
+owner = "domänexpert"
+reviewed_at = "2026-09-24"
+[rule.params]
+max_days = 7
+min_amount = "5000.00"
+
+[[rule]]
+code = "UNUSUAL_ACCOUNT_COMBINATION"
+version = "1"
+category = "pattern"
+title = "Ovanlig kontokombination"
+description = "Kombinationen debet-/kreditkonto har inte förekommit tidigare hos kunden."
+legal_basis = "God redovisningssed"
+valid_from = "2000-01-01"
+severity = "LOW"
+visibility = "INTERNAL"
+owner = "domänexpert"
+reviewed_at = "2026-09-24"
+[rule.params]
+min_history_months = 6
+min_amount = "10000.00"
+
+[[rule]]
+code = "COST_DEVIATION"
+version = "1"
+category = "trend"
+title = "Kostnad avviker från historiken"
+description = "Kostnaden på kontot avviker kraftigt från kundens normala nivå, är ny, eller saknas trots att den brukar finnas."
+legal_basis = "God redovisningssed (analytisk granskning)"
+valid_from = "2000-01-01"
+severity = "LOW"
+visibility = "CLIENT_SAFE"
+owner = "domänexpert"
+reviewed_at = "2026-09-24"
+[rule.params]
+min_history_months = 6
+robust_z = "3.5"
+min_relative_change = "0.3"
+min_amount = "5000.00"
+
+[[rule]]
+code = "REVENUE_COST_TREND"
+version = "1"
+category = "trend"
+title = "Trendbrott i omsättning eller kostnader"
+description = "Rullande 12 månader förändras mer än tröskeln jämfört med föregående 12 månader."
+legal_basis = "Analytisk granskning"
+valid_from = "2000-01-01"
+severity = "LOW"
+visibility = "CLIENT_SAFE"
+owner = "domänexpert"
+reviewed_at = "2026-09-24"
+[rule.params]
+threshold_pct = "30"
+
+# ---------------------------------------------------------------------- PTL-signaler
+# Endast för behörigheten PTL-ansvarig. Får ALDRIG nå kundrapport, kundfråga eller AI.
+
+[[rule]]
+code = "AML_LARGE_CASH"
+version = "1"
+category = "aml"
+title = "PTL-signal: stor kontantpost"
+description = "Kontanta in- eller utbetalningar över tröskelvärdet."
+legal_basis = "Lag (2017:630) om åtgärder mot penningtvätt; länsstyrelsernas vägledning 2025"
+valid_from = "2017-08-01"
+severity = "MEDIUM"
+visibility = "RESTRICTED_AML"
+owner = "PTL-ansvarig domänexpert"
+reviewed_at = "2026-09-24"
+[rule.params]
+threshold = "50000.00"
+
+[[rule]]
+code = "AML_ROUND_AMOUNTS_RELATED"
+version = "1"
+category = "aml"
+title = "PTL-signal: runda belopp mot närstående"
+description = "Stora, jämna belopp mot delägare eller närstående."
+legal_basis = "Lag (2017:630) om åtgärder mot penningtvätt; länsstyrelsernas vägledning 2025"
+valid_from = "2017-08-01"
+severity = "LOW"
+visibility = "RESTRICTED_AML"
+owner = "PTL-ansvarig domänexpert"
+reviewed_at = "2026-09-24"
+[rule.params]
+min_amount = "50000.00"
+round_to = "10000"
+
+[[rule]]
+code = "AML_RAPID_IN_OUT"
+version = "1"
+category = "aml"
+title = "PTL-signal: snabbt in- och utflöde"
+description = "Stor inbetalning som inte kommer från kunder följs inom några dagar av en utbetalning av liknande belopp."
+legal_basis = "Lag (2017:630) om åtgärder mot penningtvätt; länsstyrelsernas vägledning 2025"
+valid_from = "2017-08-01"
+severity = "MEDIUM"
+visibility = "RESTRICTED_AML"
+owner = "PTL-ansvarig domänexpert"
+reviewed_at = "2026-09-24"
+[rule.params]
+min_amount = "100000.00"
+max_days = 5
+tolerance_share = "0.05"

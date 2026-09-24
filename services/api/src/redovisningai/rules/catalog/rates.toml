@@ -1,0 +1,68 @@
+# Satser med giltighetsperioder. Ändras här – aldrig i koden.
+# Varje post: code, value, valid_from, valid_to (valfri), source, note.
+
+[[rate]]
+code = "corporate_tax"
+value = "0.206"
+valid_from = "2021-01-01"
+source = "https://www.skatteverket.se/foretag/skatterochavdrag/inkomstskatt"
+note = "Bolagsskatt för aktiebolag"
+
+[[rate]]
+code = "vat_rates_allowed"
+value = "0.25,0.12,0.06,0"
+valid_from = "1990-01-01"
+source = "Mervärdesskattelagen (2023:200)"
+note = "Tillåtna momssatser i Sverige"
+
+[[rate]]
+code = "vat_food"
+value = "0.12"
+valid_from = "1996-01-01"
+valid_to = "2026-03-31"
+source = "https://www.skatteverket.se/omoss/pressochmedia/nyheter/2026/nyheter/livsmedelsmomsensankstill6procent.5.70685bee19c85dd5dd0a3f.html"
+note = "Livsmedel före den tillfälliga sänkningen"
+
+[[rate]]
+code = "vat_food"
+value = "0.06"
+valid_from = "2026-04-01"
+valid_to = "2027-12-31"
+source = "https://www.skatteverket.se/omoss/pressochmedia/nyheter/2026/nyheter/livsmedelsmomsensankstill6procent.5.70685bee19c85dd5dd0a3f.html"
+note = "Tillfälligt sänkt livsmedelsmoms"
+
+[[rate]]
+code = "vat_food"
+value = "0.12"
+valid_from = "2028-01-01"
+source = "https://www.skatteverket.se/omoss/pressochmedia/nyheter/2026/nyheter/livsmedelsmomsensankstill6procent.5.70685bee19c85dd5dd0a3f.html"
+note = "Återgång efter tillfällig sänkning"
+
+[[rate]]
+code = "employer_contribution_full"
+value = "0.3142"
+valid_from = "2015-01-01"
+source = "https://www.skatteverket.se/foretag/arbetsgivare/arbetsgivaravgifterochskatteavdrag/arbetsgivaravgifter"
+note = "Full arbetsgivaravgift"
+
+[[rate]]
+code = "employer_contribution_youth"
+value = "0.2081"
+valid_from = "2026-04-01"
+valid_to = "2027-09-30"
+source = "https://www.skatteverket.se/omoss/pressochmedia/nyheter/2026/nyheter/lagrearbetsgivaravgifterforungdomar.5.70685bee19c85dd5dd02b10.html"
+note = "Tillfälligt sänkt avgift för 19–23-åringar på lön upp till 25 000 kr/mån"
+
+[[rate]]
+code = "employer_contribution_pension_only"
+value = "0.1021"
+valid_from = "2015-01-01"
+source = "https://www.skatteverket.se/foretag/arbetsgivare/arbetsgivaravgifterochskatteavdrag/arbetsgivaravgifter"
+note = "Endast ålderspensionsavgift (äldre anställda)"
+
+[[rate]]
+code = "tax_allocation_reserve_years"
+value = "6"
+valid_from = "2021-01-01"
+source = "Inkomstskattelagen 30 kap."
+note = "Periodiseringsfond ska återföras senast det sjätte beskattningsåret efter avsättningen"
