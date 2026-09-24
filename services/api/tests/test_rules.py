@@ -150,3 +150,16 @@ def test_voucher_gaps_are_collapsed_into_ranges() -> None:
     ctx = RuleContext(g.ledger, idx, p, CompanySettings(), assess(idx, p))
     gaps = [f for f in run_rules(ctx, codes={"VOUCHER_NUMBER_GAP"})]
     assert len(gaps) == 1 and gaps[0].details["count"] > 8000
+
+
+def test_maturity_invoice_method_when_customers_pay_same_month() -> None:
+    """Kundfakturor som betalas samma månad ger nettot 0 på 1510 – ska ändå ge fakturametoden."""
+    from pathlib import Path
+
+    from redovisningai.accounting.balances import LedgerIndex
+    from redovisningai.sie.convert import ledger_from_documents
+    from redovisningai.sie.parser import parse_sie
+
+    raw = (Path(__file__).parent / "fixtures" / "fortnox_like.se").read_bytes()
+    idx = LedgerIndex.build(ledger_from_documents([(parse_sie(raw), "fortnox_like.se")]))
+    assert assess(idx, month(2026, 8)).accounting_method.value == "invoice"

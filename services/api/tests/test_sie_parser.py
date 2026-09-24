@@ -109,3 +109,14 @@ def test_generated_company_round_trip_preserves_every_voucher() -> None:
         for a, b in zip(original.vouchers, parsed.vouchers, strict=True):
             assert a.content_hash() == b.content_hash(), (a.key, b.key)
         assert parsed.opening == original.opening
+
+
+def test_fortnox_like_export_rtrans_pair_without_date_and_text() -> None:
+    """#RTRANS följd av en kompletterande #TRANS utan datum/text räknas en gång."""
+    doc = parse_sie((FIXTURES / "fortnox_like.se").read_bytes())
+    assert doc.company_name == "Testbolaget Åäö AB"
+    v = next(v for v in doc.vouchers if v.series == "A" and v.number == "99")
+    assert v.balance == 0
+    assert [(r.account, r.status.value) for r in v.rows] == [(6570, "removed"), (5010, "added"), (1930, "normal")]
+    assert v.rows[1].text == "rätt konto"
+    assert not [i for i in doc.issues if i.code == "UNBALANCED_VOUCHER"]

@@ -12,7 +12,7 @@ Principer:
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import date
 from datetime import date as Date  # alias: fältet _OpenVoucher.date skuggar typen i klassen
 from decimal import Decimal, InvalidOperation
@@ -393,14 +393,11 @@ def _parse_trans(doc: SieDocument, v: _OpenVoucher, label: str, tokens: list[Tok
     if v.pending_added is not None:
         p = v.pending_added
         v.pending_added = None
-        if status is RowStatus.NORMAL and (p.account, p.amount, p.objects, p.trans_date, p.text) == (
-            row.account,
-            row.amount,
-            row.objects,
-            row.trans_date,
-            row.text,
-        ):
-            v.rows.append(replace(row, status=RowStatus.ADDED))
+        # Många program skriver den kompletterande #TRANS utan datum, text eller objekt – jämför
+        # därför bara konto och belopp (och objekt när båda raderna har sådana).
+        same_objects = p.objects == row.objects or not p.objects or not row.objects
+        if status is RowStatus.NORMAL and p.account == row.account and p.amount == row.amount and same_objects:
+            v.rows.append(p)  # #RTRANS-raden (status ADDED) har ofta mest information
             return
         v.rows.append(p)
     v.rows.append(row)

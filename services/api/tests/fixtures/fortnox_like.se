@@ -1,0 +1,328 @@
+#FLAGGA 0
+#PROGRAM "Fortnox" 3.0
+#FORMAT PC8
+#GEN 20260915 "Gustav T"
+#SIETYP 4
+#PROSA "Exporterad frÜn Fortnox"
+#FNR 123456
+#ORGNR 556123-4567
+#ADRESS "Gustav T" "Storgatan 1" "111 22 Stockholm" "08-123 45 67"
+#FNAMN "Testbolaget èÑî AB"
+#RAR 0 20260101 20261231
+#RAR -1 20250101 20251231
+#TAXAR 2027
+#KPTYP BAS2014
+#VALUTA SEK
+#KONTO 1510 "Kundfordringar"
+#KTYP 1510 T
+#SRU 1510 7251
+#KONTO 1930 "Fîretagskonto / affÑrskonto"
+#KONTO 2440 "Leverantîrsskulder"
+#KONTO 2611 "UtgÜende moms pÜ fîrsÑljning inom Sverige, 25 %"
+#KONTO 2641 "Debiterad ingÜende moms"
+#KONTO 2081 "Aktiekapital"
+#KONTO 2099 "èrets resultat"
+#KONTO 3001 "FîrsÑljning inom Sverige, 25 % moms"
+#KONTO 4010 "Inkîp material och varor"
+#KONTO 5010 "Lokalhyra"
+#KONTO 6570 "Bankkostnader"
+#KONTO 7010 "Lîner till kollektivanstÑllda"
+#KONTO 2710 "Personalskatt"
+#KONTO 7510 "Arbetsgivaravgifter 31,42 %"
+#KONTO 2731 "AvrÑkning lagstadgade sociala avgifter"
+#DIM 1 "KostnadsstÑlle"
+#DIM 6 "Projekt"
+#OBJEKT 1 "10" "Administration"
+#OBJEKT 6 "P1" "Projekt \"Norr\""
+#IB -1 1930 40000.00
+#IB -1 2081 -25000.00
+#IB -1 2099 -15000.00
+#UB -1 1930 52000.00
+#UB -1 2081 -25000.00
+#UB -1 2099 -27000.00
+#IB 0 1930 52000.00
+#IB 0 2081 -25000.00
+#IB 0 2099 -27000.00
+#OIB 0 1930 {1 "10"} 0.00
+#RES -1 3001 -120000.00
+#RES -1 4010 108000.00
+#PSALDO -1 202501 3001 {} -10000.00
+#PSALDO -1 202501 3001 {1 "10"} -10000.00
+#PBUDGET 0 202601 3001 {} -12000.00
+#VER A 1 20260105 "Kundfaktura 1" 20260105 "Gustav T"
+{
+   #TRANS 1510 {} 12500.00 "" "" 0
+   #TRANS 3001 {1 "10" 6 "P1"} -10000.00 "" "FîrsÑljning" 0
+   #TRANS 2611 {} -2500.00
+}
+#VER A 2 20260115 "Inbetalning kund" 20260115 "Gustav T"
+{
+   #TRANS 1930 {} 12500.00
+   #TRANS 1510 {} -12500.00
+}
+#VER B 1 20260110 "Leverantîrsfaktura Ahlsell AB" 20260110 "Gustav T"
+{
+   #TRANS 4010 {} 6000.00 20260110 "Material" 3.5 "Gustav T"
+   #TRANS 2641 {} 1500.00
+   #TRANS 2440 {} -7500.00
+}
+#VER B 2 20260128 "Betalning Ahlsell AB" 20260128 "Gustav T"
+{
+   #TRANS 2440 {} 7500.00
+   #TRANS 1930 {} -7500.00
+}
+#VER C 1 20260125 "Lîn 202601" 20260125 "Gustav T"
+{
+   #TRANS 7010 {} 20000.00
+   #TRANS 7510 {} 6284.00
+   #TRANS 2710 {} -6000.00
+   #TRANS 2731 {} -6284.00
+   #TRANS 1930 {} -14000.00
+}
+#VER A 3 20260205 "Kundfaktura 2" 20260205 "Gustav T"
+{
+   #TRANS 1510 {} 12500.00 "" "" 0
+   #TRANS 3001 {1 "10" 6 "P1"} -10000.00 "" "FîrsÑljning" 0
+   #TRANS 2611 {} -2500.00
+}
+#VER A 4 20260215 "Inbetalning kund" 20260215 "Gustav T"
+{
+   #TRANS 1930 {} 12500.00
+   #TRANS 1510 {} -12500.00
+}
+#VER B 3 20260210 "Leverantîrsfaktura Ahlsell AB" 20260210 "Gustav T"
+{
+   #TRANS 4010 {} 6000.00 20260210 "Material" 3.5 "Gustav T"
+   #TRANS 2641 {} 1500.00
+   #TRANS 2440 {} -7500.00
+}
+#VER B 4 20260228 "Betalning Ahlsell AB" 20260228 "Gustav T"
+{
+   #TRANS 2440 {} 7500.00
+   #TRANS 1930 {} -7500.00
+}
+#VER C 2 20260225 "Lîn 202602" 20260225 "Gustav T"
+{
+   #TRANS 7010 {} 20000.00
+   #TRANS 7510 {} 6284.00
+   #TRANS 2710 {} -6000.00
+   #TRANS 2731 {} -6284.00
+   #TRANS 1930 {} -14000.00
+}
+#VER A 5 20260305 "Kundfaktura 3" 20260305 "Gustav T"
+{
+   #TRANS 1510 {} 12500.00 "" "" 0
+   #TRANS 3001 {1 "10" 6 "P1"} -10000.00 "" "FîrsÑljning" 0
+   #TRANS 2611 {} -2500.00
+}
+#VER A 6 20260315 "Inbetalning kund" 20260315 "Gustav T"
+{
+   #TRANS 1930 {} 12500.00
+   #TRANS 1510 {} -12500.00
+}
+#VER B 5 20260310 "Leverantîrsfaktura Ahlsell AB" 20260310 "Gustav T"
+{
+   #TRANS 4010 {} 6000.00 20260310 "Material" 3.5 "Gustav T"
+   #TRANS 2641 {} 1500.00
+   #TRANS 2440 {} -7500.00
+}
+#VER B 6 20260328 "Betalning Ahlsell AB" 20260328 "Gustav T"
+{
+   #TRANS 2440 {} 7500.00
+   #TRANS 1930 {} -7500.00
+}
+#VER C 3 20260325 "Lîn 202603" 20260325 "Gustav T"
+{
+   #TRANS 7010 {} 20000.00
+   #TRANS 7510 {} 6284.00
+   #TRANS 2710 {} -6000.00
+   #TRANS 2731 {} -6284.00
+   #TRANS 1930 {} -14000.00
+}
+#VER A 7 20260405 "Kundfaktura 4" 20260405 "Gustav T"
+{
+   #TRANS 1510 {} 12500.00 "" "" 0
+   #TRANS 3001 {1 "10" 6 "P1"} -10000.00 "" "FîrsÑljning" 0
+   #TRANS 2611 {} -2500.00
+}
+#VER A 8 20260415 "Inbetalning kund" 20260415 "Gustav T"
+{
+   #TRANS 1930 {} 12500.00
+   #TRANS 1510 {} -12500.00
+}
+#VER B 7 20260410 "Leverantîrsfaktura Ahlsell AB" 20260410 "Gustav T"
+{
+   #TRANS 4010 {} 6000.00 20260410 "Material" 3.5 "Gustav T"
+   #TRANS 2641 {} 1500.00
+   #TRANS 2440 {} -7500.00
+}
+#VER B 8 20260428 "Betalning Ahlsell AB" 20260428 "Gustav T"
+{
+   #TRANS 2440 {} 7500.00
+   #TRANS 1930 {} -7500.00
+}
+#VER C 4 20260425 "Lîn 202604" 20260425 "Gustav T"
+{
+   #TRANS 7010 {} 20000.00
+   #TRANS 7510 {} 6284.00
+   #TRANS 2710 {} -6000.00
+   #TRANS 2731 {} -6284.00
+   #TRANS 1930 {} -14000.00
+}
+#VER A 9 20260505 "Kundfaktura 5" 20260505 "Gustav T"
+{
+   #TRANS 1510 {} 12500.00 "" "" 0
+   #TRANS 3001 {1 "10" 6 "P1"} -10000.00 "" "FîrsÑljning" 0
+   #TRANS 2611 {} -2500.00
+}
+#VER A 10 20260515 "Inbetalning kund" 20260515 "Gustav T"
+{
+   #TRANS 1930 {} 12500.00
+   #TRANS 1510 {} -12500.00
+}
+#VER B 9 20260510 "Leverantîrsfaktura Ahlsell AB" 20260510 "Gustav T"
+{
+   #TRANS 4010 {} 6000.00 20260510 "Material" 3.5 "Gustav T"
+   #TRANS 2641 {} 1500.00
+   #TRANS 2440 {} -7500.00
+}
+#VER B 10 20260528 "Betalning Ahlsell AB" 20260528 "Gustav T"
+{
+   #TRANS 2440 {} 7500.00
+   #TRANS 1930 {} -7500.00
+}
+#VER C 5 20260525 "Lîn 202605" 20260525 "Gustav T"
+{
+   #TRANS 7010 {} 20000.00
+   #TRANS 7510 {} 6284.00
+   #TRANS 2710 {} -6000.00
+   #TRANS 2731 {} -6284.00
+   #TRANS 1930 {} -14000.00
+}
+#VER A 11 20260605 "Kundfaktura 6" 20260605 "Gustav T"
+{
+   #TRANS 1510 {} 12500.00 "" "" 0
+   #TRANS 3001 {1 "10" 6 "P1"} -10000.00 "" "FîrsÑljning" 0
+   #TRANS 2611 {} -2500.00
+}
+#VER A 12 20260615 "Inbetalning kund" 20260615 "Gustav T"
+{
+   #TRANS 1930 {} 12500.00
+   #TRANS 1510 {} -12500.00
+}
+#VER B 11 20260610 "Leverantîrsfaktura Ahlsell AB" 20260610 "Gustav T"
+{
+   #TRANS 4010 {} 6000.00 20260610 "Material" 3.5 "Gustav T"
+   #TRANS 2641 {} 1500.00
+   #TRANS 2440 {} -7500.00
+}
+#VER B 12 20260628 "Betalning Ahlsell AB" 20260628 "Gustav T"
+{
+   #TRANS 2440 {} 7500.00
+   #TRANS 1930 {} -7500.00
+}
+#VER C 6 20260625 "Lîn 202606" 20260625 "Gustav T"
+{
+   #TRANS 7010 {} 20000.00
+   #TRANS 7510 {} 6284.00
+   #TRANS 2710 {} -6000.00
+   #TRANS 2731 {} -6284.00
+   #TRANS 1930 {} -14000.00
+}
+#VER A 13 20260705 "Kundfaktura 7" 20260705 "Gustav T"
+{
+   #TRANS 1510 {} 12500.00 "" "" 0
+   #TRANS 3001 {1 "10" 6 "P1"} -10000.00 "" "FîrsÑljning" 0
+   #TRANS 2611 {} -2500.00
+}
+#VER A 14 20260715 "Inbetalning kund" 20260715 "Gustav T"
+{
+   #TRANS 1930 {} 12500.00
+   #TRANS 1510 {} -12500.00
+}
+#VER B 13 20260710 "Leverantîrsfaktura Ahlsell AB" 20260710 "Gustav T"
+{
+   #TRANS 4010 {} 6000.00 20260710 "Material" 3.5 "Gustav T"
+   #TRANS 2641 {} 1500.00
+   #TRANS 2440 {} -7500.00
+}
+#VER B 14 20260728 "Betalning Ahlsell AB" 20260728 "Gustav T"
+{
+   #TRANS 2440 {} 7500.00
+   #TRANS 1930 {} -7500.00
+}
+#VER C 7 20260725 "Lîn 202607" 20260725 "Gustav T"
+{
+   #TRANS 7010 {} 20000.00
+   #TRANS 7510 {} 6284.00
+   #TRANS 2710 {} -6000.00
+   #TRANS 2731 {} -6284.00
+   #TRANS 1930 {} -14000.00
+}
+#VER A 15 20260805 "Kundfaktura 8" 20260805 "Gustav T"
+{
+   #TRANS 1510 {} 12500.00 "" "" 0
+   #TRANS 3001 {1 "10" 6 "P1"} -10000.00 "" "FîrsÑljning" 0
+   #TRANS 2611 {} -2500.00
+}
+#VER A 16 20260815 "Inbetalning kund" 20260815 "Gustav T"
+{
+   #TRANS 1930 {} 12500.00
+   #TRANS 1510 {} -12500.00
+}
+#VER B 15 20260810 "Leverantîrsfaktura Ahlsell AB" 20260810 "Gustav T"
+{
+   #TRANS 4010 {} 6000.00 20260810 "Material" 3.5 "Gustav T"
+   #TRANS 2641 {} 1500.00
+   #TRANS 2440 {} -7500.00
+}
+#VER B 16 20260828 "Betalning Ahlsell AB" 20260828 "Gustav T"
+{
+   #TRANS 2440 {} 7500.00
+   #TRANS 1930 {} -7500.00
+}
+#VER C 8 20260825 "Lîn 202608" 20260825 "Gustav T"
+{
+   #TRANS 7010 {} 20000.00
+   #TRANS 7510 {} 6284.00
+   #TRANS 2710 {} -6000.00
+   #TRANS 2731 {} -6284.00
+   #TRANS 1930 {} -14000.00
+}
+#VER A 17 20260905 "Kundfaktura 9" 20260905 "Gustav T"
+{
+   #TRANS 1510 {} 12500.00 "" "" 0
+   #TRANS 3001 {1 "10" 6 "P1"} -10000.00 "" "FîrsÑljning" 0
+   #TRANS 2611 {} -2500.00
+}
+#VER A 18 20260915 "Inbetalning kund" 20260915 "Gustav T"
+{
+   #TRANS 1930 {} 12500.00
+   #TRANS 1510 {} -12500.00
+}
+#VER B 17 20260910 "Leverantîrsfaktura Ahlsell AB" 20260910 "Gustav T"
+{
+   #TRANS 4010 {} 6000.00 20260910 "Material" 3.5 "Gustav T"
+   #TRANS 2641 {} 1500.00
+   #TRANS 2440 {} -7500.00
+}
+#VER B 18 20260928 "Betalning Ahlsell AB" 20260928 "Gustav T"
+{
+   #TRANS 2440 {} 7500.00
+   #TRANS 1930 {} -7500.00
+}
+#VER C 9 20260925 "Lîn 202609" 20260925 "Gustav T"
+{
+   #TRANS 7010 {} 20000.00
+   #TRANS 7510 {} 6284.00
+   #TRANS 2710 {} -6000.00
+   #TRANS 2731 {} -6284.00
+   #TRANS 1930 {} -14000.00
+}
+#VER A 99 20260920 ""
+{
+   #BTRANS 6570 {} 5000.00 20260920 "felkonto" 0 "Gustav T"
+   #RTRANS 5010 {} 5000.00 20260920 "rÑtt konto" 0 "Gustav T"
+   #TRANS 5010 {} 5000.00
+   #TRANS 1930 {} -5000.00
+}

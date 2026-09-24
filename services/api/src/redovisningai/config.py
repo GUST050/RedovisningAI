@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     # Utvecklingsläge: användaren man automatiskt är inloggad som (ingen inloggningssida).
     # Tom sträng = kräv att användaren väljs. Används aldrig med auth_mode=oidc.
     dev_default_user: str = "anna@demobyran.se"
+    # Utvecklingsläge: skapa demobyrån när API:t startar om den saknas (så att standardanvändaren
+    # alltid har en byrå). Görs bara när RAI_ENV=dev och RAI_AUTH_MODE=dev.
+    dev_auto_seed: bool = True
     oidc_issuer: str | None = None
     oidc_audience: str | None = None
     oidc_jwks_url: str | None = None

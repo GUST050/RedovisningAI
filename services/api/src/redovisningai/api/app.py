@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -25,11 +27,34 @@ SECURITY_HEADERS = {
 }
 
 
+def _dev_auto_seed() -> None:
+    """Utvecklingsläge: se till att demobyrån finns, så att standardanvändaren kommer rakt in."""
+    s = get_settings()
+    if not (s.env == "dev" and s.auth_mode == "dev" and s.dev_auto_seed):
+        return
+    if s.dev_default_user != "anna@demobyran.se":
+        return
+    try:
+        from redovisningai.db.bootstrap import seed_demo
+
+        res = seed_demo()
+        log.info("Demobyrån finns (org %s)", res.org_id)
+    except Exception:  # API:t ska starta även om demodata inte kunde skapas
+        log.exception("Kunde inte skapa demobyrån automatiskt")
+
+
+@asynccontextmanager
+async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
+    _dev_auto_seed()
+    yield
+
+
 def create_app() -> FastAPI:
     s = get_settings()
     if problems := s.production_problems():
         raise RuntimeError("Osäker konfiguration för produktion: " + "; ".join(problems))
     app = FastAPI(
+        lifespan=_lifespan,
         title="RedovisningAI",
         version="0.1.0",
         description="Granskningsverktyg för redovisningsbyråer. Alla belopp är strängar med exakta decimaler.",

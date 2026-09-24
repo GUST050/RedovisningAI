@@ -71,6 +71,18 @@ def _months_with_movement(index: LedgerIndex, accounts: AccountSet, months: list
     return sum(1 for v in index.monthly_series(accounts, months) if v != 0)
 
 
+def _months_with_activity(index: LedgerIndex, accounts: AccountSet, months: list[date]) -> int:
+    """Månader där något av kontona bokförts – oavsett nettot.
+
+    En kundfaktura som betalas samma månad ger nettot 0 på 1510 men visar ändå att bolaget
+    bokför fordringar (fakturametoden)."""
+    return sum(
+        1
+        for m in months
+        if any(r.account in accounts for v in index.vouchers_by_month.get(m, []) for r in v.effective_rows)
+    )
+
+
 def assess(
     index: LedgerIndex,
     period: Period,
@@ -103,9 +115,14 @@ def assess(
     # Bokföringsmetod
     if method_override is not None:
         method = method_override
-    elif len(regular) >= 3:
-        share = _months_with_movement(index, RECEIVABLES, regular) + _months_with_movement(index, PAYABLES, regular)
-        method = AccountingMethod.INVOICE if share >= len(regular) else AccountingMethod.CASH
+    elif len(voucher_months := [h for h in regular if index.coverage.get(h) == "vouchers"]) >= 3:
+        # Kontantmetoden använder kund- och leverantörsreskontran bara vid bokslutet. Bokförs någon
+        # av dem minst varannan månad under året är det fakturametoden.
+        used = max(
+            _months_with_activity(index, RECEIVABLES, voucher_months),
+            _months_with_activity(index, PAYABLES, voucher_months),
+        )
+        method = AccountingMethod.INVOICE if used * 2 >= len(voucher_months) else AccountingMethod.CASH
     else:
         method = AccountingMethod.UNKNOWN
 
