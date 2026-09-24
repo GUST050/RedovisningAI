@@ -116,17 +116,35 @@ build_all() {
   docker compose build api && docker compose build web
 }
 
+# Docker Desktops inbyggda byggmotor kan få en trasig, skrivskyddad databasfil
+# (/var/lib/docker/buildkit/...: read-only file system). Då byggs i stället i en egen
+# byggmotor (BuildKit i en container) som har sin egen lagring. Den återanvänds nästa gång.
+BUILDER=redovisningai-builder
+use_own_builder() {
+  docker builder prune -af >/dev/null 2>&1 || true
+  if ! docker buildx inspect "$BUILDER" >/dev/null 2>&1; then
+    docker buildx create --name "$BUILDER" --driver docker-container >/dev/null
+  fi
+  docker buildx inspect --bootstrap "$BUILDER" >/dev/null
+  export BUILDX_BUILDER="$BUILDER"
+  ok "Bygger med egen byggmotor ($BUILDER)"
+}
+if docker buildx inspect "$BUILDER" >/dev/null 2>&1; then
+  export BUILDX_BUILDER="$BUILDER"
+fi
+
 say "Bygger programmet (första gången tar det 3–5 minuter)"
 LOG=$(mktemp)
 if ! build_all 2>&1 | tee "$LOG"; then
-  if grep -qiE "read-only file system|no space left|input/output error" "$LOG"; then
-    echo
-    echo "Dockers disk svarade inte (vanligt direkt efter installation eller vid ont om utrymme)."
-    restart_docker || fail "Docker startade inte om. Öppna Docker Desktop manuellt och kör skriptet igen."
-    say "Försöker bygga igen"
-    build_all || fail "Bygget misslyckades igen. Öppna Docker Desktop → felsökningsikonen (🐞) → 'Clean / Purge data', kör sedan skriptet igen. Kontrollera också att du har minst 8 GB ledigt."
-  else
+  grep -qiE "read-only file system|no space left|input/output error" "$LOG" ||
     fail "Bygget misslyckades. Klistra in de sista raderna ovan i chatten så hjälper jag dig."
+  echo
+  echo "Docker Desktops byggmotor har en trasig fil – byter till en egen byggmotor."
+  if ! { use_own_builder && build_all; }; then
+    echo "Startar om Docker och försöker en sista gång."
+    restart_docker || fail "Docker startade inte om. Öppna Docker Desktop (Program → Docker) och kör skriptet igen."
+    use_own_builder
+    build_all || fail "Bygget misslyckades igen. Klistra in de sista raderna ovan i chatten."
   fi
 fi
 rm -f "$LOG"
