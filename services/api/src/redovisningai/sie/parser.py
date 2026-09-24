@@ -12,8 +12,9 @@ Principer:
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
+from datetime import date as Date  # alias: fältet _OpenVoucher.date skuggar typen i klassen
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 
@@ -240,9 +241,9 @@ _KTYP = {"T": AccountType.ASSET, "S": AccountType.LIABILITY, "K": AccountType.CO
 class _OpenVoucher:
     series: str
     number: str
-    date: date
+    date: Date
     text: str
-    reg_date: date | None
+    reg_date: Date | None
     signature: str | None
     line: int
     rows: list[Row] = field(default_factory=list)
@@ -399,27 +400,16 @@ def _parse_trans(doc: SieDocument, v: _OpenVoucher, label: str, tokens: list[Tok
             row.trans_date,
             row.text,
         ):
-            v.rows.append(Row(**{**_row_dict(row), "status": RowStatus.ADDED}))
+            v.rows.append(replace(row, status=RowStatus.ADDED))
             return
         v.rows.append(p)
     v.rows.append(row)
 
 
-def _row_dict(r: Row) -> dict[str, object]:
-    return {
-        "account": r.account,
-        "amount": r.amount,
-        "trans_date": r.trans_date,
-        "text": r.text,
-        "quantity": r.quantity,
-        "objects": r.objects,
-        "status": r.status,
-        "source_line": r.source_line,
-    }
-
-
 def _parse_header(doc: SieDocument, label: str, tokens: list[Token], idx: int, unknown: set[str]) -> None:
-    f = lambda i: _field(tokens, i)  # noqa: E731
+    def f(i: int) -> str | None:
+        return _field(tokens, i)
+
     match label:
         case "#FLAGGA":
             doc.flag = int(f(1) or 0)
@@ -504,8 +494,8 @@ def _parse_header(doc: SieDocument, label: str, tokens: list[Token], idx: int, u
             if objs:
                 return  # vi använder bara totaler (utan objekt)
             amount = parse_amount(_field(tokens, pos))
-            target = doc.period_balances if label == "#PSALDO" else doc.budget
-            target[(year_no, period, acc)] = amount
+            bucket = doc.period_balances if label == "#PSALDO" else doc.budget
+            bucket[(year_no, period, acc)] = amount
         case "#KSUMMA":
             doc.has_checksum = True
         case "#BKOD" | "#TAXAR_" | "#KONTAKT":

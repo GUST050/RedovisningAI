@@ -19,6 +19,8 @@ const csp = [
 ].join("; ");
 
 const nextConfig: NextConfig = {
+  // Fristående server för containern (apps/web/Dockerfile). RAI_API_URL läses vid bygget.
+  output: "standalone",
   poweredByHeader: false,
   async rewrites() {
     return [{ source: "/api/:path*", destination: `${api}/api/:path*` }];

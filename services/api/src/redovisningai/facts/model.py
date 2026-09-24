@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
@@ -133,7 +133,7 @@ class FactStore:
     def __contains__(self, fid: object) -> bool:
         return fid in self._facts
 
-    def __iter__(self) -> Iterable[Fact]:  # type: ignore[override]
+    def __iter__(self) -> Iterator[Fact]:
         return iter(self._facts.values())
 
     def __len__(self) -> int:
@@ -167,7 +167,7 @@ def _group(n: Decimal, decimals: int) -> str:
     sign = MINUS if v < 0 else ""
     v = abs(v)
     int_part, _, frac = f"{v:.{decimals}f}".partition(".")
-    groups = []
+    groups: list[str] = []
     while len(int_part) > 3:
         groups.insert(0, int_part[-3:])
         int_part = int_part[:-3]

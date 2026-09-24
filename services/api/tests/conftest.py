@@ -47,6 +47,8 @@ def _pg_available() -> bool:
 @pytest.fixture(scope="session")
 def database() -> Iterator[str]:
     if not _pg_available():
+        if os.environ.get("CI"):
+            pytest.fail("PostgreSQL krävs i CI – databastesterna får inte hoppas över")
         pytest.skip("PostgreSQL saknas – kör scripts/dev-postgres.sh start")
     from alembic import command
     from alembic.config import Config

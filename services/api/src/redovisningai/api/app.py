@@ -27,6 +27,8 @@ SECURITY_HEADERS = {
 
 def create_app() -> FastAPI:
     s = get_settings()
+    if problems := s.production_problems():
+        raise RuntimeError("Osäker konfiguration för produktion: " + "; ".join(problems))
     app = FastAPI(
         title="RedovisningAI",
         version="0.1.0",

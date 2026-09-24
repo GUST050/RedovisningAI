@@ -13,6 +13,7 @@ import hashlib
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import date
+from datetime import date as Date  # alias: fältet Voucher.date skuggar typen i klassen
 from decimal import Decimal
 from enum import StrEnum
 
@@ -93,10 +94,10 @@ class VoucherKey:
 class Voucher:
     series: str
     number: str
-    date: date
+    date: Date
     text: str
     rows: tuple[Row, ...]
-    reg_date: date | None = None
+    reg_date: Date | None = None
     signature: str | None = None
     source_line: int | None = None
 
@@ -116,7 +117,7 @@ class Voucher:
     def debit_total(self) -> Decimal:
         return sum((r.amount for r in self.effective_rows if r.amount > 0), ZERO)
 
-    def row_date(self, row: Row) -> date:
+    def row_date(self, row: Row) -> Date:
         return row.trans_date or self.date
 
     def content_hash(self) -> str:

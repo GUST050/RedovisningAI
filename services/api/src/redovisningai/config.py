@@ -7,6 +7,8 @@ from functools import lru_cache
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+DEV_MASTER_KEY = "dev-master-key-change-me-0123456789abcdef"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="RAI_", env_file=".env", extra="ignore")
@@ -26,7 +28,7 @@ class Settings(BaseSettings):
     s3_secret_key: str | None = None
     s3_region: str = "eu-north-1"
     # Huvudnyckel (KEK) för att kryptera byråernas datanycklar. I produktion: Key Vault/KMS.
-    master_key: str = Field(default="dev-master-key-change-me-0123456789abcdef")
+    master_key: str = Field(default=DEV_MASTER_KEY)
 
     # Autentisering
     auth_mode: str = "dev"  # dev | oidc
@@ -59,6 +61,21 @@ class Settings(BaseSettings):
     cors_origins: list[str] = ["http://localhost:3000"]
     question_link_days: int = 14
     source_file_retention_months: int = 24
+
+    def production_problems(self) -> list[str]:
+        """Inställningar som aldrig får användas i produktion."""
+        if self.env != "prod":
+            return []
+        problems = []
+        if self.auth_mode == "dev":
+            problems.append("RAI_AUTH_MODE=dev (utvecklingsinloggning) är inte tillåtet i produktion")
+        if self.master_key == DEV_MASTER_KEY or len(self.master_key) < 32:
+            problems.append("RAI_MASTER_KEY saknas eller är för kort")
+        if self.app_db_password == "app" or ":app@" in self.database_url:
+            problems.append("Databaslösenordet för applikationsrollen är standardvärdet")
+        if self.auth_mode == "oidc" and not (self.oidc_issuer and self.oidc_audience and self.oidc_jwks_url):
+            problems.append("OIDC kräver RAI_OIDC_ISSUER, RAI_OIDC_AUDIENCE och RAI_OIDC_JWKS_URL")
+        return problems
 
 
 @lru_cache(maxsize=1)

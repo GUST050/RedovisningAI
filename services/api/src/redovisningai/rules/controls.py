@@ -222,7 +222,7 @@ def _business_days_between(a: date, b: date) -> int:
 @rule("LATE_BOOKING")
 def late_booking(ctx: RuleContext, rd: RuleDefinition) -> list[FindingCandidate]:
     p = ctx.params(rd)
-    out = []
+    out: list[FindingCandidate] = []
     # Sent registrerade verifikationer syns när de registreras – granska registreringsdatum i perioden.
     for v in ctx.ledger.all_vouchers():
         if v.reg_date is None or not ctx.period.contains(v.reg_date):

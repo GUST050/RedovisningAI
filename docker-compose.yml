@@ -1,0 +1,113 @@
+# Lokal miljö/demo: PostgreSQL, API, bakgrundsarbetare och webb.
+#
+#   cp .env.example .env            # byt lösenord och nycklar
+#   docker compose up -d --build
+#   docker compose run --rm api redovisningai seed-demo   # valfritt: demobyrå med fyra kunder
+#   öppna http://localhost:3000     (utvecklingsinloggning: anna@demobyran.se)
+#
+# Profiler:  --profile s3        MinIO som S3-kompatibel objektlagring
+#            --profile pgbouncer  PgBouncer i transaktionsläge framför databasen
+#
+# Produktion: sätt RAI_ENV=prod, RAI_AUTH_MODE=oidc och riktiga hemligheter (API:t vägrar
+# annars starta), kör databasen som hanterad tjänst i EU och objektlagring med kryptering.
+
+x-api-env: &api-env
+  RAI_ENV: ${RAI_ENV:-dev}
+  RAI_AUTH_MODE: ${RAI_AUTH_MODE:-dev}
+  RAI_DATABASE_URL_OWNER: postgresql+psycopg://postgres:${POSTGRES_PASSWORD:?}@db:5432/redovisningai
+  RAI_DATABASE_URL: postgresql+psycopg://redovisningai_app:${RAI_APP_DB_PASSWORD:?}@${RAI_DB_HOST:-db}:${RAI_DB_PORT:-5432}/redovisningai
+  RAI_APP_DB_PASSWORD: ${RAI_APP_DB_PASSWORD:?}
+  RAI_MASTER_KEY: ${RAI_MASTER_KEY:?}
+  RAI_STORAGE_BACKEND: ${RAI_STORAGE_BACKEND:-local}
+  RAI_S3_ENDPOINT: ${RAI_S3_ENDPOINT:-}
+  RAI_S3_ACCESS_KEY: ${RAI_S3_ACCESS_KEY:-}
+  RAI_S3_SECRET_KEY: ${RAI_S3_SECRET_KEY:-}
+  RAI_WEB_BASE_URL: ${RAI_WEB_BASE_URL:-http://localhost:3000}
+  RAI_CORS_ORIGINS: '["${RAI_WEB_BASE_URL:-http://localhost:3000}"]'
+  RAI_OIDC_ISSUER: ${RAI_OIDC_ISSUER:-}
+  RAI_OIDC_AUDIENCE: ${RAI_OIDC_AUDIENCE:-}
+  RAI_OIDC_JWKS_URL: ${RAI_OIDC_JWKS_URL:-}
+  RAI_AI_ENABLED: ${RAI_AI_ENABLED:-false}
+  RAI_AI_PLATFORM: ${RAI_AI_PLATFORM:-bedrock}
+  RAI_AI_REGION: ${RAI_AI_REGION:-eu-north-1}
+  RAI_AI_PROJECT_ID: ${RAI_AI_PROJECT_ID:-}
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  RAI_FORTNOX_CLIENT_ID: ${RAI_FORTNOX_CLIENT_ID:-}
+  RAI_FORTNOX_CLIENT_SECRET: ${RAI_FORTNOX_CLIENT_SECRET:-}
+  RAI_FORTNOX_REDIRECT_URI: ${RAI_FORTNOX_REDIRECT_URI:-http://localhost:8000/api/connections/fortnox/callback}
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: redovisningai
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d redovisningai"]
+      interval: 5s
+      retries: 20
+
+  migrate:
+    build: ./services/api
+    environment: *api-env
+    command: ["sh", "-c", "redovisningai migrate && redovisningai worker-schema"]
+    depends_on:
+      db: { condition: service_healthy }
+
+  api:
+    build: ./services/api
+    environment: *api-env
+    volumes: [storage:/data/storage]
+    ports: ["127.0.0.1:8000:8000"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    restart: unless-stopped
+
+  worker:
+    build: ./services/api
+    environment: *api-env
+    volumes: [storage:/data/storage]
+    command: ["procrastinate", "--app=redovisningai.jobs.worker.app", "worker"]
+    healthcheck: { disable: true }
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./apps/web
+      args: { RAI_API_URL: http://api:8000 }
+    ports: ["127.0.0.1:3000:3000"]
+    depends_on: [api]
+    restart: unless-stopped
+
+  minio:
+    profiles: [s3]
+    image: minio/minio:latest
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${RAI_S3_ACCESS_KEY:-minio}
+      MINIO_ROOT_PASSWORD: ${RAI_S3_SECRET_KEY:-minio-secret}
+    volumes: [miniodata:/data]
+    ports: ["127.0.0.1:9001:9001"]
+
+  pgbouncer:
+    profiles: [pgbouncer]
+    image: edoburu/pgbouncer:latest
+    environment:
+      DB_HOST: db
+      DB_USER: redovisningai_app
+      DB_PASSWORD: ${RAI_APP_DB_PASSWORD:?}
+      DB_NAME: redovisningai
+      POOL_MODE: transaction
+      AUTH_TYPE: scram-sha-256
+    depends_on:
+      db: { condition: service_healthy }
+
+volumes:
+  pgdata:
+  storage:
+  miniodata:

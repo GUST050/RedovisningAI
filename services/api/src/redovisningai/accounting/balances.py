@@ -237,7 +237,7 @@ class LedgerIndex:
 
     def history_months(self, through: date, n: int) -> list[date]:
         """De n månaderna före `through` (exklusive) som har data."""
-        out = []
+        out: list[date] = []
         cur = add_months(month_start(through), -1)
         while len(out) < n and cur >= month_start(self.ledger.first_date):
             if self.coverage.get(cur) in ("vouchers", "psaldo"):

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import uuid
 from datetime import date
@@ -153,10 +154,53 @@ def cmd_migrate(args: argparse.Namespace) -> int:
     from alembic import command
     from alembic.config import Config
 
+    # Källkodsträdet (utveckling) eller arbetskatalogen (container där paketet är installerat).
     root = Path(__file__).resolve().parents[2]
+    if not (root / "alembic.ini").exists():
+        root = Path(os.environ.get("RAI_APP_ROOT", Path.cwd()))
     cfg = Config(str(root / "alembic.ini"))
     cfg.set_main_option("script_location", str(root / "migrations"))
     command.upgrade(cfg, "head")
+    return 0
+
+
+def cmd_worker_schema(args: argparse.Namespace) -> int:
+    """Skapa Procrastinates jobbkö (som ägarrollen) och ge applikationsrollen rätt att använda den.
+
+    Kön saknar radnivåskydd; därför innehåller jobbens argument bara id:n, aldrig kunddata.
+    """
+    import procrastinate
+    import psycopg
+
+    from redovisningai.config import get_settings
+
+    owner = get_settings().database_url_owner.replace("postgresql+psycopg://", "postgresql://")
+    with psycopg.connect(owner, autocommit=True) as conn:
+        exists = conn.execute("select to_regclass('public.procrastinate_jobs')").fetchone()[0]
+        if exists is None:
+            app = procrastinate.App(connector=procrastinate.SyncPsycopgConnector(conninfo=owner))
+            with app.open():
+                app.schema_manager.apply_schema()
+        conn.execute(
+            """
+            do $$
+            declare r record;
+            begin
+              for r in select tablename from pg_tables where schemaname = 'public' and tablename like 'procrastinate%' loop
+                execute format('grant select, insert, update, delete on public.%I to redovisningai_app', r.tablename);
+              end loop;
+              for r in select sequence_name from information_schema.sequences
+                       where sequence_schema = 'public' and sequence_name like 'procrastinate%' loop
+                execute format('grant usage, select, update on sequence public.%I to redovisningai_app', r.sequence_name);
+              end loop;
+              for r in select p.oid::regprocedure as f from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+                       where n.nspname = 'public' and p.proname like 'procrastinate%' loop
+                execute format('grant execute on function %s to redovisningai_app', r.f);
+              end loop;
+            end $$;
+            """
+        )
+    print("Jobbkön är klar." if exists is None else "Jobbkön fanns redan; behörigheter uppdaterade.")
     return 0
 
 
@@ -216,6 +260,7 @@ def main(argv: list[str] | None = None) -> int:
     d.add_argument("--as-of", default="2026-10-12")
     d.set_defaults(fn=cmd_demo_sie)
     sub.add_parser("migrate", help="Kör databasmigrationer").set_defaults(fn=cmd_migrate)
+    sub.add_parser("worker-schema", help="Skapa jobbkön för bakgrundsarbetaren").set_defaults(fn=cmd_worker_schema)
     o = sub.add_parser("create-org", help="Skapa byrå och första admin")
     o.add_argument("name")
     o.add_argument("--admin-email", required=True)

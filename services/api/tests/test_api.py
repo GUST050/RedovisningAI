@@ -257,3 +257,21 @@ def test_period_detail_and_unapproved_meeting_not_in_client_report(env) -> None:
     text = "\n".join(p.text for p in docx.Document(io.BytesIO(r.content)).paragraphs)
     assert "HEMLIGT_UTKAST" not in text
     assert c.get(f"/api/companies/{cid}/periods/1999-01", headers=H("kalle@api.se")).status_code == 404
+
+
+def test_production_refuses_insecure_defaults() -> None:
+    from redovisningai.config import Settings
+
+    bad = Settings(env="prod", auth_mode="dev")
+    assert len(bad.production_problems()) >= 2
+    good = Settings(
+        env="prod",
+        auth_mode="oidc",
+        oidc_issuer="https://login.example",
+        oidc_audience="rai",
+        oidc_jwks_url="https://login.example/jwks",
+        master_key="x" * 48,
+        app_db_password="s3cret-long",
+        database_url="postgresql+psycopg://redovisningai_app:s3cret-long@db/rai",
+    )
+    assert good.production_problems() == []

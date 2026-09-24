@@ -290,8 +290,8 @@ def drilldown(
     """
     store = store if store is not None else FactStore()
     accs = accounts if isinstance(accounts, AccountSet) else set(accounts)
-    cur_by = defaultdict(lambda: ZERO)
-    prev_by = defaultdict(lambda: ZERO)
+    cur_by: dict[int, Decimal] = defaultdict(lambda: ZERO)
+    prev_by: dict[int, Decimal] = defaultdict(lambda: ZERO)
     cp_cur: dict[str, Decimal] = defaultdict(lambda: ZERO)
     cp_prev: dict[str, Decimal] = defaultdict(lambda: ZERO)
     cp_names: dict[str, str] = {}
@@ -356,7 +356,8 @@ def drilldown(
         cp_changes.append(cc)
     cp_changes.sort(key=lambda c: abs(c.diff), reverse=True)
     top.sort(key=lambda t: t[0], reverse=True)
-    facts = [store.get(x.fact_id) for x in account_changes[:limit] + cp_changes[:limit] if x.fact_id]  # type: ignore[operator]
+    changes: list[AccountChange | CounterpartyChange] = [*account_changes[:limit], *cp_changes[:limit]]
+    facts = [store.get(x.fact_id) for x in changes if x.fact_id]
     return Drilldown(
         account_changes[:limit], cp_changes[:limit], [t[1] for t in top[:limit]], [f for f in facts if f is not None]
     )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from datetime import date
 
 from redovisningai.domain.ledger import FiscalYear, Ledger, YearData
 from redovisningai.sie.parser import SieDocument
@@ -37,7 +38,7 @@ def ledger_from_documents(docs: Iterable[tuple[SieDocument, str | None]]) -> Led
     if not docs:
         raise ValueError("Inga dokument")
     # Nyaste filen ger bolagsnamn och kontonamn.
-    docs.sort(key=lambda d: d[0].fiscal_years.get(0, (None, None))[0] or 0)  # type: ignore[arg-type,return-value]
+    docs.sort(key=lambda d: d[0].fiscal_years.get(0, (None, None))[0] or date.min)
     newest = docs[-1][0]
     ledger = Ledger(
         company_name=newest.company_name or "Okänt bolag",
