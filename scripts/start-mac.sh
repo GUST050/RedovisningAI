@@ -20,6 +20,41 @@ fail() { printf "\n\033[1;31m✗ %s\033[0m\n" "$1"; exit 1; }
 # Docker Desktops kommandon ligger här innan de länkats in i PATH.
 export PATH="$PATH:/usr/local/bin:/opt/homebrew/bin:/Applications/Docker.app/Contents/Resources/bin"
 
+# `docker info` kan hänga när Docker Desktop har fastnat – fråga därför med tidsgräns (10 s).
+docker_ok() {
+  docker info >/dev/null 2>&1 &
+  local pid=$! i=0
+  while kill -0 "$pid" 2>/dev/null; do
+    i=$((i + 1))
+    if [ "$i" -ge 10 ]; then { kill -9 "$pid"; wait "$pid"; } 2>/dev/null || true; return 1; fi
+    sleep 1
+  done
+  wait "$pid"
+}
+
+wait_for_docker() {  # $1 = max antal sekunder
+  local start=$SECONDS
+  printf "Väntar på Docker"
+  while [ $((SECONDS - start)) -lt "$1" ]; do
+    if docker_ok; then echo; return 0; fi
+    printf "."
+    sleep 3
+  done
+  echo
+  return 1
+}
+
+# Stänger Docker Desktop helt (även om det har hängt sig) och startar det igen.
+restart_docker() {
+  echo "Startar om Docker Desktop (stänger alla Docker-processer först) …"
+  osascript -e 'quit app "Docker"' >/dev/null 2>&1 &
+  sleep 8
+  pkill -9 -f "/Applications/Docker.app" 2>/dev/null || true
+  sleep 3
+  open -a Docker
+  wait_for_docker 240
+}
+
 # ------------------------------------------------------------------ 1. Docker installerat?
 if ! command -v docker >/dev/null 2>&1 && [ ! -d /Applications/Docker.app ]; then
   say "Docker saknas – installerar Docker Desktop"
@@ -43,18 +78,14 @@ if ! command -v docker >/dev/null 2>&1 && [ ! -d /Applications/Docker.app ]; the
 fi
 
 # ------------------------------------------------------------------ 2. Docker igång?
-if ! docker info >/dev/null 2>&1; then
-  say "Startar Docker Desktop"
+say "Kontrollerar att Docker är igång"
+if ! docker_ok; then
   open -a Docker
   echo "Första gången: godkänn villkoren i Docker-fönstret (konto behövs inte – välj Skip)."
-  printf "Väntar på Docker"
-  for _ in $(seq 1 90); do
-    docker info >/dev/null 2>&1 && break
-    printf "."
-    sleep 2
-  done
-  echo
-  docker info >/dev/null 2>&1 || fail "Docker startade inte inom 3 minuter. Öppna Docker Desktop, vänta tills det står 'Engine running' och kör skriptet igen."
+  if ! wait_for_docker 180; then
+    echo "Docker svarar inte – det har troligen hängt sig."
+    restart_docker || fail "Docker startar inte. Öppna Docker Desktop → felsökningsikonen (🐞) → 'Reset to factory defaults', vänta tills det står 'Engine running' och kör skriptet igen."
+  fi
 fi
 ok "Docker är igång ($(docker --version | cut -d, -f1))"
 
@@ -79,15 +110,6 @@ if [ "${free_gb:-99}" -lt 8 ]; then
   echo "Varning: bara ${free_gb} GB ledigt på disken. Docker behöver ungefär 8 GB."
   echo "Frigör utrymme (t.ex. Inställningar → Allmänt → Lagring) om bygget misslyckas."
 fi
-
-restart_docker() {
-  echo "Startar om Docker Desktop …"
-  osascript -e 'quit app "Docker"' >/dev/null 2>&1 || true
-  sleep 5
-  open -a Docker
-  for _ in $(seq 1 90); do docker info >/dev/null 2>&1 && return 0; sleep 2; done
-  return 1
-}
 
 # Bygger en avbild i taget (mindre belastning på Dockers disk än parallella byggen).
 build_all() {
