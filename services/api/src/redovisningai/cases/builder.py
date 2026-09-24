@@ -36,6 +36,9 @@ FAMILIES: dict[str, set[str]] = {
 }
 
 
+SAME_RULE_GROUPS = {"IB_NE_PREV_UB", "VOUCHER_NUMBER_GAP", "PAYROLL_TAX_NOT_CLEARED"}
+
+
 @dataclass(frozen=True, slots=True)
 class CaseTemplate:
     title: str
@@ -93,6 +96,13 @@ TEMPLATES: dict[str, CaseTemplate] = {
         "Obalanserad verifikation",
         "En verifikation balanserar inte – troligen en felregistrering eller ofullständig import.",
         "Rätta verifikationen i bokföringssystemet.",
+        False,
+    ),
+    "IB_NE_PREV_UB": CaseTemplate(
+        "Ingående balans avviker från föregående år",
+        "IB stämmer inte med föregående års utgående balans – "
+        "troligen en rättelse i fjolårets bokslut som inte förts över, eller en felaktig IB-import.",
+        "Stäm av IB mot fastställd årsredovisning och rätta.",
         False,
     ),
     "CHANGED_AFTER_APPROVAL": CaseTemplate(
@@ -214,7 +224,9 @@ def _related(a: FindingRecord, b: FindingRecord) -> bool:
     if not same_family or a.period != b.period:
         return False
     if a.rule_code == b.rule_code:
-        return False  # samma regel i samma period = separata problem om de inte delar verifikation
+        # Samma regel i samma period är normalt separata problem – utom när regeln beskriver
+        # ett och samma underliggande fel (t.ex. IB som avviker på flera konton samma år).
+        return a.rule_code in SAME_RULE_GROUPS
     if set(a.accounts) & set(b.accounts):
         return True
     # Moms- och lönefamiljerna hör ihop per period även utan gemensamt konto.
@@ -272,7 +284,8 @@ def build_cases(records: list[FindingRecord], *, include_closed: bool = False) -
         if len(group) == 1 or tpl is None:
             title = lead.title
         else:
-            title = f"{tpl.title}: {lead.title}" if tpl.title not in lead.title else lead.title
+            context = ", ".join(lead.vouchers[:2]) if lead.vouchers else lead.period
+            title = f"{tpl.title} ({context})"
         root = tpl.root_cause if tpl else lead.description
         if len(group) > 1:
             root += " Hör ihop med: " + "; ".join(f.title for f in group if f is not lead) + "."

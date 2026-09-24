@@ -211,7 +211,9 @@ class _Builder:
         rev = self.revenue_for(month_index, date(y, m, 1))
         for _ in range(self.rng.randint(2, 4)):
             vendor = self.rng.choice(MATERIAL_VENDORS)
-            self.supplier(date(y, m, self.rng.randint(2, 26)), vendor, 4010, rev * 0.35 / 3)
+            self.supplier(
+                date(y, m, self.rng.randint(2, 26)), vendor, 4010, rev * 0.35 / 3 * self.rng.uniform(0.6, 1.4)
+            )
         self.supplier(date(y, m, 1), "Fastighets AB Kvarnen", 5010, self.p.rent, pay_days=0)
         ms = 24_900 if date(y, m, 1) < date(2026, 4, 1) else 31_200
         self.supplier(date(y, m, 3), "Microsoft Ireland", 6540, ms * self.p.employees / 6)
