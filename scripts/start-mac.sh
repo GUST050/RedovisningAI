@@ -3,9 +3,11 @@
 #
 #   ./scripts/start-mac.sh
 #
-# Skriptet installerar Docker Desktop vid behov (via Homebrew), skapar .env med slumpade
-# hemligheter, bygger och startar alla delar, lägger in demodata första gången och öppnar
-# webbläsaren. Det går att köra igen när som helst; det som redan är klart hoppas över.
+# Använder en Docker-motor som redan är igång (Docker Desktop, OrbStack, Colima). Finns
+# ingen fungerande motor installeras och startas Colima via Homebrew – en Docker-motor utan
+# app som styrs helt från terminalen. Skriptet skapar .env med slumpade hemligheter, bygger
+# och startar alla delar, lägger in demodata första gången och öppnar webbläsaren.
+# Det går att köra igen när som helst; det som redan är klart hoppas över.
 # Kompatibelt med macOS standard-bash (3.2).
 
 set -euo pipefail
@@ -17,11 +19,14 @@ fail() { printf "\n\033[1;31m✗ %s\033[0m\n" "$1"; exit 1; }
 
 [ "$(uname)" = "Darwin" ] || fail "Skriptet är gjort för macOS. På andra system: se README.md."
 
-# Docker Desktops kommandon ligger här innan de länkats in i PATH.
-export PATH="$PATH:/usr/local/bin:/opt/homebrew/bin:/Applications/Docker.app/Contents/Resources/bin"
+for b in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+  [ -x "$b" ] && eval "$("$b" shellenv)" && break
+done
+export PATH="$PATH:/usr/local/bin"
 
-# `docker info` kan hänga när Docker Desktop har fastnat – fråga därför med tidsgräns (10 s).
+# `docker info` kan hänga när en Docker-motor har fastnat – fråga därför med tidsgräns (10 s).
 docker_ok() {
+  command -v docker >/dev/null 2>&1 || return 1
   docker info >/dev/null 2>&1 &
   local pid=$! i=0
   while kill -0 "$pid" 2>/dev/null; do
@@ -44,57 +49,91 @@ wait_for_docker() {  # $1 = max antal sekunder
   return 1
 }
 
-# Stänger Docker Desktop helt (även om det har hängt sig) och startar det igen.
-restart_docker() {
-  echo "Startar om Docker Desktop (stänger alla Docker-processer först) …"
-  osascript -e 'quit app "Docker"' >/dev/null 2>&1 &
-  sleep 8
-  pkill -9 -f "/Applications/Docker.app" 2>/dev/null || true
-  sleep 3
-  open /Applications/Docker.app || return 1
-  wait_for_docker 240
+ensure_brew() {
+  command -v brew >/dev/null 2>&1 && return 0
+  echo "Homebrew (pakethanteraren för Mac) behövs."
+  printf "Installera Homebrew nu? Du får ange ditt Mac-lösenord. [j/N] "
+  read -r svar
+  case "$svar" in
+    j|J|ja|Ja|y|Y) /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" ;;
+    *) fail "Homebrew behövs. Installera från https://brew.sh och kör skriptet igen." ;;
+  esac
+  for b in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+    [ -x "$b" ] && eval "$("$b" shellenv)" && break
+  done
+  command -v brew >/dev/null 2>&1 || fail "Homebrew hittades inte efter installationen. Öppna en ny terminal och kör skriptet igen."
 }
 
-# ------------------------------------------------------------------ 1. Docker installerat?
-# Appen kan saknas även om kommandot `docker` finns kvar (t.ex. om appen raderats).
-# Hoppa över om en annan Docker-motor redan svarar (t.ex. OrbStack).
-if [ ! -d /Applications/Docker.app ] && ! docker_ok; then
-  say "Docker-appen saknas – installerar Docker Desktop"
-  if ! command -v brew >/dev/null 2>&1; then
-    echo "Homebrew (pakethanteraren för Mac) behövs för att installera Docker automatiskt."
-    printf "Installera Homebrew nu? Du får ange ditt Mac-lösenord. [j/N] "
-    read -r svar
-    case "$svar" in
-      j|J|ja|Ja|y|Y)
-        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-        [ -x /opt/homebrew/bin/brew ] && eval "$(/opt/homebrew/bin/brew shellenv)"
-        [ -x /usr/local/bin/brew ] && eval "$(/usr/local/bin/brew shellenv)"
-        ;;
-      *)
-        fail "Installera Docker Desktop manuellt: https://www.docker.com/products/docker-desktop/ och kör skriptet igen."
-        ;;
-    esac
-  fi
-  if brew list --cask docker-desktop >/dev/null 2>&1; then
-    brew reinstall --cask docker-desktop
-  else
-    brew install --cask --force docker-desktop
-  fi
-  [ -d /Applications/Docker.app ] || fail "Installationen av Docker Desktop misslyckades. Klistra in raderna ovan i chatten."
-  ok "Docker Desktop installerat"
-fi
+brew_formula() {  # installera formler som saknas
+  local f
+  for f in "$@"; do
+    # En varning om länkning (t.ex. när Docker Desktop redan har lagt `docker` i PATH) ska inte
+    # stoppa skriptet – kommandona kontrolleras efteråt.
+    brew list --formula "$f" >/dev/null 2>&1 || brew install "$f" || true
+  done
+}
 
-# ------------------------------------------------------------------ 2. Docker igång?
-say "Kontrollerar att Docker är igång"
-if ! docker_ok; then
-  open /Applications/Docker.app || fail "Kunde inte öppna Docker Desktop. Klistra in raderna ovan i chatten."
-  echo "Första gången: godkänn villkoren i Docker-fönstret (konto behövs inte – välj Skip)."
-  if ! wait_for_docker 180; then
-    echo "Docker svarar inte – det har troligen hängt sig."
-    restart_docker || fail "Docker startar inte. Öppna Docker Desktop → felsökningsikonen (🐞) → 'Reset to factory defaults', vänta tills det står 'Engine running' och kör skriptet igen."
+# Colima: Docker-motor i en liten Linux-VM, utan app. Stabilare än en trasig Docker Desktop.
+start_colima() {
+  say "Startar Docker-motorn Colima (ingen app behövs)"
+  # Stäng en hängande Docker Desktop så att den inte krockar.
+  pkill -9 -f "/Applications/Docker.app" 2>/dev/null || true
+  ensure_brew
+  brew_formula colima docker docker-compose docker-buildx
+  command -v colima >/dev/null 2>&1 || fail "Colima kunde inte installeras. Klistra in raderna ovan i chatten."
+  command -v docker >/dev/null 2>&1 || fail "Docker-kommandot kunde inte installeras. Klistra in raderna ovan i chatten."
+
+  # Gör `docker compose` och `docker buildx` tillgängliga som tillägg till docker-kommandot.
+  mkdir -p "$HOME/.docker/cli-plugins"
+  ln -sfn "$(brew --prefix)/opt/docker-compose/bin/docker-compose" "$HOME/.docker/cli-plugins/docker-compose"
+  ln -sfn "$(brew --prefix)/opt/docker-buildx/bin/docker-buildx" "$HOME/.docker/cli-plugins/docker-buildx"
+
+  # Docker Desktop lämnar ofta kvar en inloggningshjälpare som inte fungerar utan appen.
+  local cfg="$HOME/.docker/config.json"
+  if [ -f "$cfg" ] && grep -q '"credsStore"' "$cfg" && ! command -v docker-credential-desktop >/dev/null 2>&1; then
+    mv "$cfg" "$cfg.bak-$(date +%Y%m%d%H%M%S)"
+    echo '{}' > "$cfg"
+  fi
+
+  if ! colima status >/dev/null 2>&1; then
+    local major
+    major=$(sw_vers -productVersion | cut -d. -f1)
+    if [ "$major" -ge 13 ]; then
+      colima start --vm-type vz --cpu 2 --memory 4 --disk 40
+    else
+      brew_formula qemu
+      colima start --cpu 2 --memory 4 --disk 40
+    fi
+  fi
+  docker context use colima >/dev/null 2>&1 || true
+  wait_for_docker 120 || fail "Colima startade inte. Kör 'colima start' i terminalen och klistra in utskriften i chatten."
+}
+
+restart_engine() {
+  if command -v colima >/dev/null 2>&1 && colima status >/dev/null 2>&1; then
+    echo "Startar om Colima …"
+    colima restart && wait_for_docker 120
+  else
+    start_colima
+  fi
+}
+
+# ------------------------------------------------------------------ 1–2. Docker-motor
+say "Kontrollerar Docker"
+if docker_ok; then
+  ok "Docker svarar"
+elif command -v colima >/dev/null 2>&1; then
+  start_colima
+else
+  # Försök med Docker Desktop om den finns, annars (eller om den inte svarar) Colima.
+  if [ -d /Applications/Docker.app ]; then
+    open /Applications/Docker.app 2>/dev/null || true
+    wait_for_docker 90 || { echo "Docker Desktop svarar inte – byter till Colima."; start_colima; }
+  else
+    start_colima
   fi
 fi
-ok "Docker är igång ($(docker --version | cut -d, -f1))"
+ok "Docker är igång ($(docker --version | cut -d, -f1), motor: $(docker context show 2>/dev/null || echo okänd))"
 
 # ------------------------------------------------------------------ 3. .env med hemligheter
 if [ ! -f .env ]; then
@@ -123,7 +162,7 @@ build_all() {
   docker compose build api && docker compose build web
 }
 
-# Docker Desktops inbyggda byggmotor kan få en trasig, skrivskyddad databasfil
+# Docker-motorns inbyggda byggmotor kan få en trasig, skrivskyddad databasfil
 # (/var/lib/docker/buildkit/...: read-only file system). Då byggs i stället i en egen
 # byggmotor (BuildKit i en container) som har sin egen lagring. Den återanvänds nästa gång.
 BUILDER=redovisningai-builder
@@ -137,7 +176,12 @@ use_own_builder() {
   ok "Bygger med egen byggmotor ($BUILDER)"
 }
 if docker buildx inspect "$BUILDER" >/dev/null 2>&1; then
-  export BUILDX_BUILDER="$BUILDER"
+  # Återanvänd bara om byggmotorn går att starta i den aktuella Docker-motorn.
+  if docker buildx inspect --bootstrap "$BUILDER" >/dev/null 2>&1; then
+    export BUILDX_BUILDER="$BUILDER"
+  else
+    docker buildx rm "$BUILDER" >/dev/null 2>&1 || true
+  fi
 fi
 
 say "Bygger programmet (första gången tar det 3–5 minuter)"
@@ -146,10 +190,10 @@ if ! build_all 2>&1 | tee "$LOG"; then
   grep -qiE "read-only file system|no space left|input/output error" "$LOG" ||
     fail "Bygget misslyckades. Klistra in de sista raderna ovan i chatten så hjälper jag dig."
   echo
-  echo "Docker Desktops byggmotor har en trasig fil – byter till en egen byggmotor."
+  echo "Dockers byggmotor har en trasig fil – byter till en egen byggmotor."
   if ! { use_own_builder && build_all; }; then
-    echo "Startar om Docker och försöker en sista gång."
-    restart_docker || fail "Docker startade inte om. Öppna Docker Desktop (Program → Docker) och kör skriptet igen."
+    echo "Byter Docker-motor och försöker en sista gång."
+    restart_engine
     use_own_builder
     build_all || fail "Bygget misslyckades igen. Klistra in de sista raderna ovan i chatten."
   fi
@@ -203,7 +247,7 @@ cat <<'TXT'
                  lisa@demobyran.se   (läsare)
 
   Egen SIE-fil:  Lägg till kund på startsidan → fliken Data → dra in filen.
-  Stoppa:        docker compose down        (datan sparas)
+  Stoppa:        docker compose down        (datan sparas; 'colima stop' frigör minnet)
   Starta igen:   ./scripts/start-mac.sh
   Radera allt:   docker compose down -v
 

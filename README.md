@@ -41,8 +41,10 @@ docker-compose.yml, .github/workflows/ci.yml
 ./scripts/start-mac.sh
 ```
 
-Skriptet installerar Docker Desktop vid behov, skapar `.env` med slumpade hemligheter, startar
-allt, lägger in demodata och öppnar http://localhost:3000.
+Skriptet använder en Docker-motor som redan är igång (Docker Desktop, OrbStack eller Colima).
+Finns ingen som fungerar installeras och startas **Colima** via Homebrew – en Docker-motor utan
+app. Sedan skapas `.env` med slumpade hemligheter, allt byggs och startas, demodata läggs in och
+http://localhost:3000 öppnas.
 
 ## Kom igång med Docker
 
