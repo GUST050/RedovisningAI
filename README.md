@@ -35,6 +35,15 @@ apps/web/         Next.js 16: portfölj, kundens arbetsyta, publik svarssida, re
 docker-compose.yml, .github/workflows/ci.yml
 ```
 
+## Kom igång på Mac (ett kommando)
+
+```bash
+./scripts/start-mac.sh
+```
+
+Skriptet installerar Docker Desktop vid behov, skapar `.env` med slumpade hemligheter, startar
+allt, lägger in demodata och öppnar http://localhost:3000.
+
 ## Kom igång med Docker
 
 ```bash
