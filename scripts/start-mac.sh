@@ -51,13 +51,15 @@ restart_docker() {
   sleep 8
   pkill -9 -f "/Applications/Docker.app" 2>/dev/null || true
   sleep 3
-  open -a Docker
+  open /Applications/Docker.app || return 1
   wait_for_docker 240
 }
 
 # ------------------------------------------------------------------ 1. Docker installerat?
-if ! command -v docker >/dev/null 2>&1 && [ ! -d /Applications/Docker.app ]; then
-  say "Docker saknas – installerar Docker Desktop"
+# Appen kan saknas även om kommandot `docker` finns kvar (t.ex. om appen raderats).
+# Hoppa över om en annan Docker-motor redan svarar (t.ex. OrbStack).
+if [ ! -d /Applications/Docker.app ] && ! docker_ok; then
+  say "Docker-appen saknas – installerar Docker Desktop"
   if ! command -v brew >/dev/null 2>&1; then
     echo "Homebrew (pakethanteraren för Mac) behövs för att installera Docker automatiskt."
     printf "Installera Homebrew nu? Du får ange ditt Mac-lösenord. [j/N] "
@@ -73,14 +75,19 @@ if ! command -v docker >/dev/null 2>&1 && [ ! -d /Applications/Docker.app ]; the
         ;;
     esac
   fi
-  brew install --cask docker-desktop || brew install --cask docker
+  if brew list --cask docker-desktop >/dev/null 2>&1; then
+    brew reinstall --cask docker-desktop
+  else
+    brew install --cask --force docker-desktop
+  fi
+  [ -d /Applications/Docker.app ] || fail "Installationen av Docker Desktop misslyckades. Klistra in raderna ovan i chatten."
   ok "Docker Desktop installerat"
 fi
 
 # ------------------------------------------------------------------ 2. Docker igång?
 say "Kontrollerar att Docker är igång"
 if ! docker_ok; then
-  open -a Docker
+  open /Applications/Docker.app || fail "Kunde inte öppna Docker Desktop. Klistra in raderna ovan i chatten."
   echo "Första gången: godkänn villkoren i Docker-fönstret (konto behövs inte – välj Skip)."
   if ! wait_for_docker 180; then
     echo "Docker svarar inte – det har troligen hängt sig."
