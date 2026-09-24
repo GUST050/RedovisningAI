@@ -41,10 +41,17 @@ docker-compose.yml, .github/workflows/ci.yml
 ./scripts/start-mac.sh
 ```
 
-Skriptet använder en Docker-motor som redan är igång (Docker Desktop, OrbStack eller Colima).
-Finns ingen som fungerar installeras och startas **Colima** via Homebrew – en Docker-motor utan
-app. Sedan skapas `.env` med slumpade hemligheter, allt byggs och startas, demodata läggs in och
-http://localhost:3000 öppnas.
+Skriptet startar Docker Desktop vid behov, skapar `.env` med slumpade hemligheter, bygger och
+startar allt, lägger in demodata och öppnar http://localhost:3000.
+
+Om Docker Desktop inte startar eller bygget ger `read-only file system`:
+
+```bash
+./scripts/fix-docker-mac.sh
+```
+
+Det kontrollerar först orsaken (oftast för lite ledigt utrymme på Macen) och installerar sedan om
+Docker Desktop rent och testar att både körning och bygge fungerar.
 
 ## Kom igång med Docker
 

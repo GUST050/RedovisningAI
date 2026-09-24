@@ -3,9 +3,8 @@
 #
 #   ./scripts/start-mac.sh
 #
-# Använder en Docker-motor som redan är igång (Docker Desktop, OrbStack, Colima). Finns
-# ingen fungerande motor installeras och startas Colima via Homebrew – en Docker-motor utan
-# app som styrs helt från terminalen. Skriptet skapar .env med slumpade hemligheter, bygger
+# Kräver Docker Desktop (reparera/installera med ./scripts/fix-docker-mac.sh). Skriptet
+# startar Docker vid behov, skapar .env med slumpade hemligheter, bygger
 # och startar alla delar, lägger in demodata första gången och öppnar webbläsaren.
 # Det går att köra igen när som helst; det som redan är klart hoppas över.
 # Kompatibelt med macOS standard-bash (3.2).
@@ -49,91 +48,15 @@ wait_for_docker() {  # $1 = max antal sekunder
   return 1
 }
 
-ensure_brew() {
-  command -v brew >/dev/null 2>&1 && return 0
-  echo "Homebrew (pakethanteraren för Mac) behövs."
-  printf "Installera Homebrew nu? Du får ange ditt Mac-lösenord. [j/N] "
-  read -r svar
-  case "$svar" in
-    j|J|ja|Ja|y|Y) /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" ;;
-    *) fail "Homebrew behövs. Installera från https://brew.sh och kör skriptet igen." ;;
-  esac
-  for b in /opt/homebrew/bin/brew /usr/local/bin/brew; do
-    [ -x "$b" ] && eval "$("$b" shellenv)" && break
-  done
-  command -v brew >/dev/null 2>&1 || fail "Homebrew hittades inte efter installationen. Öppna en ny terminal och kör skriptet igen."
-}
-
-brew_formula() {  # installera formler som saknas
-  local f
-  for f in "$@"; do
-    # En varning om länkning (t.ex. när Docker Desktop redan har lagt `docker` i PATH) ska inte
-    # stoppa skriptet – kommandona kontrolleras efteråt.
-    brew list --formula "$f" >/dev/null 2>&1 || brew install "$f" || true
-  done
-}
-
-# Colima: Docker-motor i en liten Linux-VM, utan app. Stabilare än en trasig Docker Desktop.
-start_colima() {
-  say "Startar Docker-motorn Colima (ingen app behövs)"
-  # Stäng en hängande Docker Desktop så att den inte krockar.
-  pkill -9 -f "/Applications/Docker.app" 2>/dev/null || true
-  ensure_brew
-  brew_formula colima docker docker-compose docker-buildx
-  command -v colima >/dev/null 2>&1 || fail "Colima kunde inte installeras. Klistra in raderna ovan i chatten."
-  command -v docker >/dev/null 2>&1 || fail "Docker-kommandot kunde inte installeras. Klistra in raderna ovan i chatten."
-
-  # Gör `docker compose` och `docker buildx` tillgängliga som tillägg till docker-kommandot.
-  mkdir -p "$HOME/.docker/cli-plugins"
-  ln -sfn "$(brew --prefix)/opt/docker-compose/bin/docker-compose" "$HOME/.docker/cli-plugins/docker-compose"
-  ln -sfn "$(brew --prefix)/opt/docker-buildx/bin/docker-buildx" "$HOME/.docker/cli-plugins/docker-buildx"
-
-  # Docker Desktop lämnar ofta kvar en inloggningshjälpare som inte fungerar utan appen.
-  local cfg="$HOME/.docker/config.json"
-  if [ -f "$cfg" ] && grep -q '"credsStore"' "$cfg" && ! command -v docker-credential-desktop >/dev/null 2>&1; then
-    mv "$cfg" "$cfg.bak-$(date +%Y%m%d%H%M%S)"
-    echo '{}' > "$cfg"
-  fi
-
-  if ! colima status >/dev/null 2>&1; then
-    local major
-    major=$(sw_vers -productVersion | cut -d. -f1)
-    if [ "$major" -ge 13 ]; then
-      colima start --vm-type vz --cpu 2 --memory 4 --disk 40
-    else
-      brew_formula qemu
-      colima start --cpu 2 --memory 4 --disk 40
-    fi
-  fi
-  docker context use colima >/dev/null 2>&1 || true
-  wait_for_docker 120 || fail "Colima startade inte. Kör 'colima start' i terminalen och klistra in utskriften i chatten."
-}
-
-restart_engine() {
-  if command -v colima >/dev/null 2>&1 && colima status >/dev/null 2>&1; then
-    echo "Startar om Colima …"
-    colima restart && wait_for_docker 120
-  else
-    start_colima
-  fi
-}
-
-# ------------------------------------------------------------------ 1–2. Docker-motor
+# ------------------------------------------------------------------ 1–2. Docker
 say "Kontrollerar Docker"
-if docker_ok; then
-  ok "Docker svarar"
-elif command -v colima >/dev/null 2>&1; then
-  start_colima
-else
-  # Försök med Docker Desktop om den finns, annars (eller om den inte svarar) Colima.
-  if [ -d /Applications/Docker.app ]; then
-    open /Applications/Docker.app 2>/dev/null || true
-    wait_for_docker 90 || { echo "Docker Desktop svarar inte – byter till Colima."; start_colima; }
-  else
-    start_colima
-  fi
+if ! docker_ok; then
+  [ -d /Applications/Docker.app ] || fail "Docker Desktop saknas eller är trasigt. Kör:  ./scripts/fix-docker-mac.sh"
+  open /Applications/Docker.app 2>/dev/null || true
+  echo "Om ett Docker-fönster frågar något: välj Skip / Continue without signing in."
+  wait_for_docker 180 || fail "Docker startar inte. Reparera Docker med:  ./scripts/fix-docker-mac.sh"
 fi
-ok "Docker är igång ($(docker --version | cut -d, -f1), motor: $(docker context show 2>/dev/null || echo okänd))"
+ok "Docker är igång ($(docker --version | cut -d, -f1))"
 
 # ------------------------------------------------------------------ 3. .env med hemligheter
 if [ ! -f .env ]; then
@@ -152,9 +75,10 @@ fi
 
 # ------------------------------------------------------------------ 4. Bygg och starta
 free_gb=$(df -g "$HOME" | awk 'NR==2 {print $4}')
-if [ "${free_gb:-99}" -lt 8 ]; then
-  echo "Varning: bara ${free_gb} GB ledigt på disken. Docker behöver ungefär 8 GB."
-  echo "Frigör utrymme (t.ex. Inställningar → Allmänt → Lagring) om bygget misslyckas."
+# För lite ledigt utrymme gör att Dockers virtuella disk blir skrivskyddad mitt i bygget
+# ("read-only file system"). Stoppa hellre här med en tydlig förklaring.
+if [ "${free_gb:-99}" -lt 10 ]; then
+  fail "Bara ${free_gb} GB ledigt på Macen – Docker behöver minst 10 GB. Frigör plats ( → Systeminställningar → Allmänt → Lagring) och kör skriptet igen."
 fi
 
 # Bygger en avbild i taget (mindre belastning på Dockers disk än parallella byggen).
@@ -192,10 +116,7 @@ if ! build_all 2>&1 | tee "$LOG"; then
   echo
   echo "Dockers byggmotor har en trasig fil – byter till en egen byggmotor."
   if ! { use_own_builder && build_all; }; then
-    echo "Byter Docker-motor och försöker en sista gång."
-    restart_engine
-    use_own_builder
-    build_all || fail "Bygget misslyckades igen. Klistra in de sista raderna ovan i chatten."
+    fail "Dockers disk är skadad. Reparera med:  ./scripts/fix-docker-mac.sh  och kör sedan det här skriptet igen."
   fi
 fi
 rm -f "$LOG"
@@ -247,7 +168,7 @@ cat <<'TXT'
                  lisa@demobyran.se   (läsare)
 
   Egen SIE-fil:  Lägg till kund på startsidan → fliken Data → dra in filen.
-  Stoppa:        docker compose down        (datan sparas; 'colima stop' frigör minnet)
+  Stoppa:        docker compose down        (datan sparas)
   Starta igen:   ./scripts/start-mac.sh
   Radera allt:   docker compose down -v
 
