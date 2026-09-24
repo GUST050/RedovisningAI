@@ -135,3 +135,18 @@ def test_maturity_preliminary_when_payroll_missing() -> None:
     m = assess(idx, month(2026, 9))
     assert m.status is PeriodStatus.PRELIMINARY
     assert m.payroll_booked is False
+
+
+def test_voucher_gaps_are_collapsed_into_ranges() -> None:
+    from decimal import Decimal
+
+    from redovisningai.domain.ledger import Row, Voucher
+
+    g = generate(DEMO_PROFILES[3], date(2026, 10, 12))
+    rows = (Row(6110, Decimal("100")), Row(1930, Decimal("-100")))
+    g.ledger.current.vouchers.append(Voucher("D", "9000", date(2026, 9, 29), "Felnumrerad", rows))
+    idx = LedgerIndex.build(g.ledger)
+    p = month(2026, 9)
+    ctx = RuleContext(g.ledger, idx, p, CompanySettings(), assess(idx, p))
+    gaps = [f for f in run_rules(ctx, codes={"VOUCHER_NUMBER_GAP"})]
+    assert len(gaps) == 1 and gaps[0].details["count"] > 8000

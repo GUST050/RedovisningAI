@@ -173,24 +173,38 @@ def voucher_number_gap(ctx: RuleContext, rd: RuleDefinition) -> list[FindingCand
                 )
             seen.add(n)
         missing = sorted(set(range(nums[0], nums[-1] + 1)) - seen)
-        # Rapportera bara luckor som ligger t.o.m. granskad period.
-        by_no = {n: v for n, v in items}
+        # Slå ihop på varandra följande saknade nummer till intervall – ett fynd per lucka.
+        ranges: list[tuple[int, int]] = []
         for n in missing:
-            nxt = next((by_no[k] for k in range(n + 1, nums[-1] + 1) if k in by_no), None)
+            if ranges and n == ranges[-1][1] + 1:
+                ranges[-1] = (ranges[-1][0], n)
+            else:
+                ranges.append((n, n))
+        by_no = {n: v for n, v in items}
+        for lo, hi in ranges:
+            nxt = next((by_no[k] for k in range(hi + 1, nums[-1] + 1) if k in by_no), None)
             if nxt is not None and nxt.date > ctx.period.end:
                 continue
+            count = hi - lo + 1
+            label = f"{series}{lo}" if lo == hi else f"{series}{lo}–{series}{hi}"
             out.append(
                 candidate(
                     ctx,
                     rd,
-                    title=f"Lucka i nummerserie {series}: {series}{n} saknas",
+                    title=f"Lucka i nummerserie {series}: {label} saknas" + (f" ({count} nummer)" if count > 1 else ""),
                     description=(
-                        f"Verifikation {series}{n} saknas i räkenskapsåret {year.fiscal_year.label}. "
-                        "Verifikationsnummer ska löpa i obruten följd."
+                        f"{'Verifikation' if count == 1 else 'Verifikationerna'} {label} saknas i räkenskapsåret "
+                        f"{year.fiscal_year.label}. Verifikationsnummer ska löpa i obruten följd."
+                        + (
+                            " Ett stort hopp i numreringen kan bero på felregistrerat verifikationsnummer."
+                            if count > 20
+                            else ""
+                        )
                     ),
-                    key=(year.fiscal_year.start.isoformat(), series, n),
+                    key=(year.fiscal_year.start.isoformat(), series, lo, hi),
                     period=f"{nxt.date:%Y-%m}" if nxt else ctx.period.spec,
-                    vouchers=[f"{series}{n}"],
+                    vouchers=[f"{series}{lo}"] if count == 1 else [f"{series}{lo}", f"{series}{hi}"],
+                    details={"missing_from": lo, "missing_to": hi, "count": count},
                 )
             )
     return out

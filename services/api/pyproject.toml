@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-ai = ["anthropic[bedrock]>=0.40"]
+ai = ["anthropic[bedrock,vertex]>=1.8"]
 s3 = ["boto3>=1.34"]
 worker = ["procrastinate>=2.0"]
 dev = [

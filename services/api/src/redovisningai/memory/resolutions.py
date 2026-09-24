@@ -27,13 +27,20 @@ def amount_bucket(amount: Decimal | None) -> int | None:
     return math.floor(math.log(float(abs(amount))) / math.log(1.5))
 
 
-def _counterparty_key(rec: FindingRecord, ledger: Ledger | None) -> str:
-    if ledger is None or not rec.vouchers:
+def voucher_texts(ledger: Ledger) -> dict[str, str]:
+    return {str(v.key): v.text for v in ledger.all_vouchers()}
+
+
+def _counterparty_key(rec: FindingRecord, ledger: Ledger | None, texts: dict[str, str] | None = None) -> str:
+    if (ledger is None and texts is None) or not rec.vouchers:
         return ""
-    wanted = set(rec.vouchers)
-    for v in ledger.all_vouchers():
-        if str(v.key) in wanted:
-            g = guess_counterparty(v.text)
+    if texts is None:
+        assert ledger is not None
+        texts = voucher_texts(ledger)
+    for key in rec.vouchers:
+        text = texts.get(key)
+        if text:
+            g = guess_counterparty(text)
             if g.key:
                 return g.key
     return ""
@@ -65,11 +72,13 @@ class PatternSignature:
         return " · ".join(parts)
 
 
-def signature_for(rec: FindingRecord, ledger: Ledger | None = None) -> PatternSignature:
+def signature_for(
+    rec: FindingRecord, ledger: Ledger | None = None, texts: dict[str, str] | None = None
+) -> PatternSignature:
     return PatternSignature(
         rule_code=rec.rule_code,
         accounts=tuple(sorted(set(rec.accounts)))[:4],
-        counterparty=_counterparty_key(rec, ledger),
+        counterparty=_counterparty_key(rec, ledger, texts),
         bucket=amount_bucket(rec.amount),
     )
 
@@ -170,10 +179,16 @@ _DECISION_SV = {
 
 
 def suggest(
-    rec: FindingRecord, resolutions: list[Resolution], ledger: Ledger | None = None, today: date | None = None
+    rec: FindingRecord,
+    resolutions: list[Resolution],
+    ledger: Ledger | None = None,
+    today: date | None = None,
+    texts: dict[str, str] | None = None,
 ) -> MemorySuggestion | None:
     today = today or date.today()
-    sig = signature_for(rec, ledger)
+    if not resolutions:
+        return None
+    sig = signature_for(rec, ledger, texts)
     valid = [r for r in resolutions if r.valid_on(today) and r.rule_code == rec.rule_code]
     exact = [r for r in valid if r.signature_exact == sig.exact]
     similar = [r for r in valid if r.signature_loose == sig.loose]
@@ -209,10 +224,11 @@ def apply_memory(
 ) -> int:
     """Sätt minnesförslag på öppna fynd. Returnerar antal fynd som fick förslag."""
     n = 0
+    texts = voucher_texts(ledger) if (ledger is not None and resolutions) else None
     for rec in records:
         if not rec.status.is_open:
             continue
-        s = suggest(rec, resolutions, ledger, today)
+        s = suggest(rec, resolutions, ledger, today, texts)
         rec.memory_suggestion = s.to_dict() if s else None
         n += 1 if s else 0
     return n

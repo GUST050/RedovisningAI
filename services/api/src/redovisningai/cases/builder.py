@@ -222,6 +222,8 @@ def _related(a: FindingRecord, b: FindingRecord) -> bool:
 
 
 def _components(records: list[FindingRecord]) -> list[list[FindingRecord]]:
+    """Sammanhängande grupper. Kandidatpar hittas via index (verifikation, period+familj),
+    inte genom att jämföra alla par – så att stora mängder fynd går snabbt."""
     parent = list(range(len(records)))
 
     def find(i: int) -> int:
@@ -230,10 +232,23 @@ def _components(records: list[FindingRecord]) -> list[list[FindingRecord]]:
             i = parent[i]
         return i
 
-    for i in range(len(records)):
-        for j in range(i + 1, len(records)):
-            if _related(records[i], records[j]):
-                parent[find(i)] = find(j)
+    buckets: dict[tuple[str, ...], list[int]] = defaultdict(list)
+    for i, r in enumerate(records):
+        for v in r.vouchers:
+            buckets[("v", v)].append(i)
+        for name, fam in FAMILIES.items():
+            if r.rule_code in fam:
+                buckets[("f", name, r.period)].append(i)
+    checked: set[tuple[int, int]] = set()
+    for members in buckets.values():
+        for x in range(len(members)):
+            for y in range(x + 1, len(members)):
+                i, j = members[x], members[y]
+                if (i, j) in checked or find(i) == find(j):
+                    continue
+                checked.add((i, j))
+                if _related(records[i], records[j]):
+                    parent[find(i)] = find(j)
     groups: dict[int, list[FindingRecord]] = defaultdict(list)
     for i, r in enumerate(records):
         groups[find(i)].append(r)

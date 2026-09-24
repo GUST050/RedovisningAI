@@ -229,7 +229,7 @@ def render_value(f: Fact) -> str:
     return str(f.value)
 
 
-PLACEHOLDER_RE = re.compile(r"\{f:([a-zA-Z0-9_\-]+)\}")
+PLACEHOLDER_RE = re.compile(r"\{f:([^}\s]+)\}")
 
 
 def render_text(text: str, store: FactStore) -> str:
