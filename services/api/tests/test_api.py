@@ -275,3 +275,15 @@ def test_production_refuses_insecure_defaults() -> None:
         database_url="postgresql+psycopg://redovisningai_app:s3cret-long@db/rai",
     )
     assert good.production_problems() == []
+
+
+def test_dev_mode_logs_in_default_user_without_login_step(env, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from redovisningai.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "dev_default_user", "admin@api.se")
+    r = env["client"].get("/api/me")
+    assert r.status_code == 200 and r.json()["user"]["email"] == "admin@api.se"
+    # Ett uttryckligt val går före standardanvändaren.
+    assert env["client"].get("/api/me", headers=H("kalle@api.se")).json()["user"]["email"] == "kalle@api.se"
+    monkeypatch.setattr(get_settings(), "auth_mode", "oidc")
+    assert env["client"].get("/api/me").status_code == 401

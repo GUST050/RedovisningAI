@@ -22,6 +22,8 @@ os.environ.setdefault("RAI_DATABASE_URL_OWNER", OWNER_URL)
 os.environ.setdefault("RAI_DATABASE_URL", APP_URL)
 os.environ.setdefault("RAI_STORAGE_PATH", tempfile.mkdtemp(prefix="rai-storage-"))
 os.environ.setdefault("RAI_ENV", "test")
+# Testerna kontrollerar att oinloggade anrop nekas – ingen automatisk standardanvändare.
+os.environ.setdefault("RAI_DEV_DEFAULT_USER", "")
 
 
 def _pg_available() -> bool:

@@ -32,6 +32,9 @@ class Settings(BaseSettings):
 
     # Autentisering
     auth_mode: str = "dev"  # dev | oidc
+    # Utvecklingsläge: användaren man automatiskt är inloggad som (ingen inloggningssida).
+    # Tom sträng = kräv att användaren väljs. Används aldrig med auth_mode=oidc.
+    dev_default_user: str = "anna@demobyran.se"
     oidc_issuer: str | None = None
     oidc_audience: str | None = None
     oidc_jwks_url: str | None = None

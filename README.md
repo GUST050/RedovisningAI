@@ -61,11 +61,13 @@ docker compose up -d --build
 docker compose run --rm api redovisningai seed-demo
 ```
 
-Öppna http://localhost:3000 och logga in som `anna@demobyran.se` (byråadmin) eller
-`lisa@demobyran.se` (läsare). Demobyrån har fyra kunder med inplanterade fel: felaktig matmoms,
-lucka i nummerserie, dubbelbokning, saknade löner, förfallen periodiseringsfond m.m.
+Öppna http://localhost:3000 – du är automatiskt inloggad som `anna@demobyran.se` (byråadmin),
+ingen inloggningssida. Vill du testa som läsare: http://localhost:3000/login → `lisa@demobyran.se`.
+Demobyrån har fyra kunder med inplanterade fel: felaktig matmoms, lucka i nummerserie,
+dubbelbokning, saknade löner, förfallen periodiseringsfond m.m.
 
-Inloggningen ovan är utvecklingsinloggning. I produktion krävs `RAI_ENV=prod` och
+Den automatiska inloggningen finns bara i utvecklingsläge (`RAI_AUTH_MODE=dev`, användaren styrs
+av `RAI_DEV_DEFAULT_USER`). I produktion krävs `RAI_ENV=prod` och
 `RAI_AUTH_MODE=oidc` (t.ex. Microsoft Entra ID). API:t vägrar starta med standardnycklar,
 standardlösenord eller utvecklingsinloggning i produktionsläge.
 

@@ -3,7 +3,7 @@
 #   cp .env.example .env            # byt lösenord och nycklar
 #   docker compose up -d --build
 #   docker compose run --rm api redovisningai seed-demo   # valfritt: demobyrå med fyra kunder
-#   öppna http://localhost:3000     (utvecklingsinloggning: anna@demobyran.se)
+#   öppna http://localhost:3000     (automatiskt inloggad som anna@demobyran.se i utvecklingsläge)
 #
 # Profiler:  --profile s3        MinIO som S3-kompatibel objektlagring
 #            --profile pgbouncer  PgBouncer i transaktionsläge framför databasen
@@ -14,6 +14,7 @@
 x-api-env: &api-env
   RAI_ENV: ${RAI_ENV:-dev}
   RAI_AUTH_MODE: ${RAI_AUTH_MODE:-dev}
+  RAI_DEV_DEFAULT_USER: ${RAI_DEV_DEFAULT_USER:-anna@demobyran.se}
   RAI_DATABASE_URL_OWNER: postgresql+psycopg://postgres:${POSTGRES_PASSWORD:?}@db:5432/redovisningai
   RAI_DATABASE_URL: postgresql+psycopg://redovisningai_app:${RAI_APP_DB_PASSWORD:?}@${RAI_DB_HOST:-db}:${RAI_DB_PORT:-5432}/redovisningai
   RAI_APP_DB_PASSWORD: ${RAI_APP_DB_PASSWORD:?}

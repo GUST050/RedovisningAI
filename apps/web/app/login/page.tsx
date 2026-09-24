@@ -13,7 +13,7 @@ export default function LoginPage() {
   };
   return (
     <main className="mx-auto mt-24 max-w-md">
-      <Card title="Logga in (utvecklingsläge)">
+      <Card title="Byt användare (utvecklingsläge)">
         <form
           className="space-y-4"
           onSubmit={(ev) => {

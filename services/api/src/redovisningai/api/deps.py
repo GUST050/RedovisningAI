@@ -68,7 +68,8 @@ def _jwks_client() -> jwt.PyJWKClient:
 def _subject_from_request(request: Request, authorization: str | None, dev_user: str | None) -> str:
     s = get_settings()
     if s.auth_mode == "dev":
-        email = dev_user or request.cookies.get("rai_dev_user")
+        # Utan val av användare loggas man in som standardanvändaren (bara i utvecklingsläge).
+        email = dev_user or request.cookies.get("rai_dev_user") or s.dev_default_user
         if not email:
             raise HTTPException(401, "Inte inloggad")
         return f"dev:{email}"

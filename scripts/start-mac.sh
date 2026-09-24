@@ -163,9 +163,7 @@ curl -fsS http://localhost:3000/login >/dev/null 2>&1 || {
 ok "Klart!"
 cat <<'TXT'
 
-  Öppnar http://localhost:3000
-  Logga in som:  anna@demobyran.se   (byråadmin)
-                 lisa@demobyran.se   (läsare)
+  Öppnar http://localhost:3000 – du är automatiskt inloggad som anna@demobyran.se (byråadmin).
 
   Egen SIE-fil:  Lägg till kund på startsidan → fliken Data → dra in filen.
   Stoppa:        docker compose down        (datan sparas)
