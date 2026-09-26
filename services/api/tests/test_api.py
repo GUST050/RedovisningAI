@@ -3,15 +3,23 @@
 from __future__ import annotations
 
 import io
+import json
+import uuid
 import zipfile
+from copy import deepcopy
 from datetime import date
 
 import pytest
 from fastapi.testclient import TestClient
+from openpyxl import load_workbook
+from sqlalchemy import select
 
+from redovisningai.ai.service import AIService, FakeProvider
+from redovisningai.api import routes_other
 from redovisningai.api.app import create_app
+from redovisningai.db import models as m
 from redovisningai.db.bootstrap import add_user, create_company, create_organization
-from redovisningai.db.session import TenantContext
+from redovisningai.db.session import TenantContext, tenant_session
 from redovisningai.devdata.generator import DEMO_PROFILES, generate
 from redovisningai.jobs.pipeline import import_sie
 from redovisningai.sie.writer import write_sie4
@@ -42,6 +50,12 @@ def H(email: str) -> dict[str, str]:
 def test_requires_login(env) -> None:  # type: ignore[no-untyped-def]
     assert env["client"].get("/api/me").status_code == 401
     assert env["client"].get("/api/me", headers=H("okand@x.se")).status_code == 403
+
+
+def test_encoded_dev_login_cookie_authenticates(env) -> None:  # type: ignore[no-untyped-def]
+    response = env["client"].get("/api/me", headers={"Cookie": "rai_dev_user=admin%40api.se"})
+    assert response.status_code == 200
+    assert response.json()["user"]["email"] == "admin@api.se"
 
 
 def test_me_and_security_headers(env) -> None:  # type: ignore[no-untyped-def]
@@ -100,6 +114,7 @@ def test_cases_decide_and_viewer_blocked(env) -> None:  # type: ignore[no-untype
     cl, cid = env["client"], env["cid"]
     cases = cl.get(f"/api/companies/{cid}/cases?period=2026-09", headers=H("kalle@api.se")).json()
     assert cases and all(c["visibility"] != "RESTRICTED_AML" for c in cases)
+    assert all("{f:" not in c["root_cause"] for c in cases)
     low = next(c for c in cases if c["severity"] != "HIGH")
     r = cl.post(
         f"/api/companies/{cid}/cases/{low['key']}/decision",
@@ -161,8 +176,62 @@ def test_ai_endpoints_fall_back_without_provider(env) -> None:  # type: ignore[n
     assert all("{f:" not in x["rendered"] for x in c["data"]["claims"])
     m = cl.post(f"/api/companies/{cid}/periods/2026-09/meeting", headers=H("kalle@api.se")).json()
     assert "summary" in m["data"]
+    detail = cl.get(f"/api/companies/{cid}/periods/2026-09", headers=H("kalle@api.se")).json()
+    assert detail["commentary"]["stale"] is False
+    assert detail["client_report"]["stale"] is False
     a = cl.post(f"/api/companies/{cid}/ask", headers=H("kalle@api.se"), json={"question": "Varför föll resultatet?"})
     assert a.status_code == 200
+
+
+def test_fresh_meeting_can_be_approved_and_exported(env) -> None:  # type: ignore[no-untyped-def]
+    client, company_id = env["client"], env["cid"]
+    created = client.post(f"/api/companies/{company_id}/periods/2026-09/meeting", headers=H("kalle@api.se"))
+    assert created.status_code == 200
+    statement = "Försäljningen ska följas upp med kunden."
+    approved = client.put(
+        f"/api/companies/{company_id}/periods/2026-09/meeting",
+        headers=H("admin@api.se"),
+        json={
+            "summary": [statement],
+            "questions": [],
+            "decisions": [
+                {"index": 0, "statement": statement, "decision": "approve", "reason": "Kontrollerat mot bokföringen"}
+            ],
+            "approve": True,
+        },
+    )
+    assert approved.status_code == 200
+    exported = client.get(
+        f"/api/companies/{company_id}/reports/client?period=2026-09&format=docx",
+        headers=H("admin@api.se"),
+    )
+    assert exported.status_code == 200
+
+
+def test_a3_sends_only_aggregated_transaction_findings_to_provider(env, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    cl, cid = env["client"], env["cid"]
+    provider = FakeProvider()
+    service = AIService(provider, keep_payloads=False)
+    monkeypatch.setattr("redovisningai.api.routes_review._ai", lambda _principal: service)
+
+    response = cl.post(f"/api/companies/{cid}/periods/2026-09/commentary", headers=H("kalle@api.se"))
+
+    assert response.status_code == 200
+    assert len(provider.calls) == 1
+    user_content = provider.calls[0]["user_content"]
+    start = user_content.index("<kunddata>") + len("<kunddata>\n")
+    end = user_content.index("\n</kunddata>")
+    package = json.loads(user_content[start:end])
+    assert "company" not in package
+    assert len(package["findings"]) <= 5
+    assert all("sources" not in finding for finding in package["findings"])
+    assert all(finding["label"] != "private vendor name" for finding in package["findings"])
+    assert all("voucher" not in fact and "lineage" not in fact and "label" not in fact for fact in package["facts"])
+    serialized = json.dumps(package, ensure_ascii=False)
+    assert "API-byrån" not in serialized
+    assert "Kalle" not in serialized
+    assert "lönespecifikation" not in serialized
+    assert response.json()["trace_id"]
 
 
 def test_reports_and_exports(env) -> None:  # type: ignore[no-untyped-def]
@@ -179,6 +248,25 @@ def test_reports_and_exports(env) -> None:  # type: ignore[no-untyped-def]
     with zipfile.ZipFile(io.BytesIO(docx.content)) as z:
         body = z.read("word/document.xml").decode()
     assert "PTL" not in body and "låneförbud" not in body.lower()
+
+
+def test_transaction_export_contains_every_visible_row(env) -> None:  # type: ignore[no-untyped-def]
+    cl, cid = env["client"], env["cid"]
+    listed = cl.get(
+        f"/api/companies/{cid}/transactions?from=2026-01-01&to=2026-09-30&page_size=1",
+        headers=H("kalle@api.se"),
+    )
+    assert listed.status_code == 200
+    total = listed.json()["total"]
+    assert total > 500  # regression: the export used to stop after its first page
+
+    exported = cl.get(f"/api/companies/{cid}/export/transactions.xlsx?period=YTD:2026-09", headers=H("kalle@api.se"))
+    assert exported.status_code == 200
+    workbook = load_workbook(io.BytesIO(exported.content), read_only=True)
+    try:
+        assert workbook["Transaktioner"].max_row - 1 == total
+    finally:
+        workbook.close()
 
 
 def test_approve_requires_override_with_open_high(env) -> None:  # type: ignore[no-untyped-def]
@@ -259,10 +347,68 @@ def test_period_detail_and_unapproved_meeting_not_in_client_report(env) -> None:
     assert c.get(f"/api/companies/{cid}/periods/1999-01", headers=H("kalle@api.se")).status_code == 404
 
 
-def test_production_refuses_insecure_defaults() -> None:
-    from redovisningai.config import Settings
+def test_client_export_rejects_approved_legacy_draft_without_fingerprint(env) -> None:  # type: ignore[no-untyped-def]
+    client, company_id = env["client"], uuid.UUID(env["cid"])
+    client.post(f"/api/companies/{company_id}/periods/2026-09/meeting", headers=H("kalle@api.se"))
+    org = env["org"]
+    ctx = TenantContext(org.org_id, org.admin_user_id, "ADMIN", True, True, "admin@api.se")
+    with tenant_session(ctx) as session:
+        review = session.scalar(
+            select(m.PeriodReview).where(m.PeriodReview.company_id == company_id, m.PeriodReview.period == "2026-09")
+        )
+        assert review is not None
+        original = deepcopy(review.client_report)
+        review.client_report = {"approved": True, "data": {"summary": [], "questions": []}}
+    try:
+        response = client.get(
+            f"/api/companies/{company_id}/reports/client?period=2026-09&format=docx",
+            headers=H("kalle@api.se"),
+        )
+        assert response.status_code == 409
+    finally:
+        with tenant_session(ctx) as session:
+            review = session.scalar(
+                select(m.PeriodReview).where(
+                    m.PeriodReview.company_id == company_id, m.PeriodReview.period == "2026-09"
+                )
+            )
+            assert review is not None
+            review.client_report = original
 
-    bad = Settings(env="prod", auth_mode="dev")
+
+def test_internal_report_uses_saved_commentary_comparison(env, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    client, company_id = env["client"], env["cid"]
+    response = client.post(
+        f"/api/companies/{company_id}/periods/2026-09/commentary?compare=2026-08",
+        headers=H("kalle@api.se"),
+    )
+    assert response.status_code == 200
+    captured: dict[str, str] = {}
+    original = routes_other.internal_report
+
+    def capture(overview, *args, **kwargs):  # type: ignore[no-untyped-def]
+        captured["compare"] = overview["sections"]["month"]["compare"]["spec"]
+        return original(overview, *args, **kwargs)
+
+    monkeypatch.setattr(routes_other, "internal_report", capture)
+    exported = client.get(
+        f"/api/companies/{company_id}/reports/internal?period=2026-09&format=docx",
+        headers=H("kalle@api.se"),
+    )
+    assert exported.status_code == 200
+    assert captured["compare"] == "2026-08"
+
+
+def test_production_refuses_insecure_defaults() -> None:
+    from redovisningai.config import DEV_MASTER_KEY, Settings
+
+    bad = Settings(
+        env="prod",
+        auth_mode="dev",
+        master_key=DEV_MASTER_KEY,
+        app_db_password="app",
+        database_url="postgresql+psycopg://redovisningai_app:app@db/rai",
+    )
     assert len(bad.production_problems()) >= 2
     good = Settings(
         env="prod",

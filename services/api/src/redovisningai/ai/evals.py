@@ -13,14 +13,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
+from decimal import Decimal
 from typing import Any
 
+from redovisningai.accounting.comparisons import ComparisonPair
+from redovisningai.accounting.metric_explanations import MetricComponent, MetricExplanation
+from redovisningai.accounting.periods import month
 from redovisningai.accounting.statements import StatementMapping
 from redovisningai.ai.service import AIService
 from redovisningai.ai.verifier import find_literal_numbers
+from redovisningai.analytics.finding_candidates import collect_candidates
 from redovisningai.devdata.generator import DEMO_PROFILES, generate
-from redovisningai.facts.model import Visibility
+from redovisningai.facts.model import FactStatus, Unit, Visibility
 from redovisningai.review.analysis import CompanyAnalysis, CompanyContext
+from redovisningai.review.finding_priorities import rank_findings
 from redovisningai.rules.engine import CompanySettings
 
 
@@ -57,8 +63,76 @@ def _claims(data: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+def run_finding_evals() -> list[EvalResult]:
+    """Syntetisk, offline eval för evidensbunden gruppering och top-five-grinden."""
+    current, previous = month(2026, 9), month(2025, 9)
+    pair = ComparisonPair(current, previous, FactStatus.CALCULATED)
+    component_a = MetricComponent(
+        "account:6110",
+        "Konsultkostnader",
+        Decimal("8000"),
+        Decimal("2000"),
+        Decimal("6000"),
+        Unit.SEK,
+        "account_voucher",
+        {6110: Decimal("8000")},
+        {6110: Decimal("2000")},
+        "fact-a",
+    )
+    component_b = MetricComponent(
+        "account:6110",
+        "Konsultkostnader",
+        Decimal("4"),
+        Decimal("2"),
+        Decimal("2"),
+        Unit.PERCENT,
+        "account_voucher",
+        {6110: Decimal("8000")},
+        {6110: Decimal("2000")},
+        "fact-b",
+    )
+    explanations = [
+        MetricExplanation(
+            code,
+            code,
+            unit,
+            change,
+            Decimal("0"),
+            change,
+            FactStatus.CALCULATED,
+            (component,),
+            (),
+            {"current": current.spec, "previous": previous.spec},
+            {"calc": "1"},
+            (component.fact_id or "",),
+        )
+        for code, unit, change, component in (
+            ("external_costs", Unit.SEK, Decimal("6000"), component_a),
+            ("operating_margin", Unit.PERCENT, Decimal("2"), component_b),
+        )
+    ]
+    candidates = collect_candidates(None, pair, explanations, mapping_version="synthetic-map-v1")
+    ranked = rank_findings(candidates)
+    missing_pair = ComparisonPair(current, previous, FactStatus.INSUFFICIENT_DATA, ("synthetic missing month",))
+    missing_candidates = collect_candidates(None, missing_pair, explanations, mapping_version="synthetic-map-v1")
+    failures = []
+    if len(candidates) != 1 or set(candidates[0].fact_ids) != {"fact-a", "fact-b"}:
+        failures.append("relaterade mått grupperades inte med båda faktahänvisningarna")
+    if missing_candidates:
+        failures.append("ofullständigt periodpar gav analyskandidater")
+    if len(ranked.top) > 5:
+        failures.append("topplistan överskred fem kandidater")
+    metrics = {
+        "grouped_candidates": float(len(candidates)),
+        "fact_references": float(len(candidates[0].fact_ids)) if candidates else 0.0,
+        "incomplete_candidates": float(len(missing_candidates)),
+        "top_five": float(len(ranked.top)),
+    }
+    return [EvalResult("findings", "synthetic", "rules", metrics, failures)]
+
+
 def run_evals(service: AIService, *, as_of: date = date(2026, 10, 12), period: str = "2026-09") -> list[EvalResult]:
-    results: list[EvalResult] = []
+    results: list[EvalResult] = run_finding_evals()
     for profile in DEMO_PROFILES:
         g = generate(profile, as_of)
         ctx = CompanyContext(

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEV_MASTER_KEY = "dev-master-key-change-me-0123456789abcdef"
@@ -44,7 +44,7 @@ class Settings(BaseSettings):
 
     # AI
     ai_enabled: bool = False
-    ai_platform: str = "bedrock"  # bedrock | vertex | anthropic | fake
+    ai_platform: str = "bedrock"  # bedrock | vertex | anthropic | openai | fake
     ai_region: str | None = "eu-north-1"
     ai_project_id: str | None = None
     ai_secondary_platform: str | None = None  # failover
@@ -54,6 +54,18 @@ class Settings(BaseSettings):
     ai_model_small: str = "claude-opus-5"
     ai_refusal_fallback_model: str | None = "claude-opus-4-8"
     ai_trace_retention_days: int = 30
+    openai_api_key: str | None = Field(
+        default=None, validation_alias=AliasChoices("OPENAI_API_KEY", "RAI_OPENAI_API_KEY")
+    )
+    openai_base_url: str | None = None
+    openai_model_strong: str = "gpt-6-luna"
+    openai_model_medium: str = "gpt-6-luna"
+    openai_model_small: str = "gpt-6-luna"
+    # Testläge är standard även med aktiverad AI: lågt tak, ingen automatisk reservleverantör.
+    ai_test_mode: bool = True
+    ai_test_monthly_token_cap: int = Field(default=20_000, ge=1)
+    ai_test_max_output_tokens: int = Field(default=1_500, ge=1)
+    ai_test_max_tool_calls: int = Field(default=3, ge=0)
 
     # Fortnox
     fortnox_client_id: str | None = None

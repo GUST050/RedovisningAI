@@ -220,9 +220,12 @@ def parse_amount(value: str | None) -> Decimal:
     if "," in v and "." not in v:
         v = v.replace(",", ".")
     try:
-        return Decimal(v)
+        amount = Decimal(v)
     except InvalidOperation as exc:
         raise ValueError(f"Ogiltigt belopp: {value!r}") from exc
+    if not amount.is_finite():
+        raise ValueError(f"Ogiltigt belopp: {value!r}")
+    return amount
 
 
 def _account_no(value: str | None) -> int:

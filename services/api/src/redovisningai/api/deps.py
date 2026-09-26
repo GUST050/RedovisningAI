@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import urllib.parse
 import uuid
 from collections import OrderedDict
 from collections.abc import Iterator
@@ -69,7 +70,9 @@ def _subject_from_request(request: Request, authorization: str | None, dev_user:
     s = get_settings()
     if s.auth_mode == "dev":
         # Utan val av användare loggas man in som standardanvändaren (bara i utvecklingsläge).
-        email = dev_user or request.cookies.get("rai_dev_user") or s.dev_default_user
+        cookie_user = request.cookies.get("rai_dev_user")
+        # Webben skriver cookien med encodeURIComponent; Starlette avkodar inte %-sekvenser.
+        email = dev_user or (urllib.parse.unquote(cookie_user) if cookie_user else None) or s.dev_default_user
         if not email:
             raise HTTPException(401, "Inte inloggad")
         return f"dev:{email}"

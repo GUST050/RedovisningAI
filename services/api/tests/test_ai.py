@@ -18,6 +18,7 @@ from redovisningai.ai.providers.base import (
 )
 from redovisningai.ai.pseudonymize import Pseudonymizer, luhn_ok
 from redovisningai.ai.service import AIService, FakeProvider
+from redovisningai.ai.tasks import period_commentary_input
 from redovisningai.ai.tools import analyst_tools
 from redovisningai.ai.verifier import find_literal_numbers, verify_claims
 from redovisningai.devdata.generator import DEMO_PROFILES, generate
@@ -26,6 +27,138 @@ from redovisningai.review.analysis import CompanyAnalysis, CompanyContext
 from redovisningai.rules.engine import CompanySettings
 
 AS_OF = date(2026, 10, 12)
+
+
+def test_a3_provider_payload_is_restricted_to_approved_aggregates() -> None:
+    safe_fact_id = "net_sales_123"
+    package = {
+        "company": "Känsligt AB",
+        "period": {"spec": "2026-09", "label": "September"},
+        "compare": {"spec": "2025-09", "label": "September"},
+        "comparison_status": "CALCULATED",
+        "comparison_warnings": [],
+        "metrics": {"net_sales": {"id": safe_fact_id, "change_id": None, "change_pct_id": "growth_456"}},
+        "bridge": {
+            "components": [
+                {
+                    "code": "personnel",
+                    "label": "Kundens fria etikett Olofsson",
+                    "effect": "-5000",
+                    "fact_id": "cost_789",
+                }
+            ]
+        },
+        "maturity": {"low_periodization": False, "recommended_view": "month", "notes": ["Do not send"]},
+        "open_cases": {"high": 1, "titles": ["Olofsson saknar lönespecifikation"]},
+        "findings": [
+            {
+                "code": "recurring_cost_change",
+                "period_pair": ["2026-09", "2025-09"],
+                "fact_id": "candidate_222",
+                "fact_ids": ["cost_789"],
+                "unit": "SEK",
+                "accounts": [6540, 7010, 2710],
+                "metric_codes": ["operating_result"],
+                "source_level": "account_voucher",
+                "evidence_count": 3,
+                "current_count": 1,
+                "sources": [{"references": [{"voucher": "A55", "content_hash": "secret"}], "name": "private vendor"}],
+                "label": "private vendor name",
+            }
+        ],
+        "facts": [
+            {
+                "id": safe_fact_id,
+                "value": "120000",
+                "unit": "SEK",
+                "status": "CALCULATED",
+                "period": "2026-09",
+                "label": "private vendor",
+            },
+            {
+                "id": "growth_456",
+                "value": "0.12",
+                "unit": "percent",
+                "status": "CALCULATED",
+                "period": "2026-09",
+                "text_value": "voucher text",
+            },
+            {
+                "id": "cost_789",
+                "value": "-5000",
+                "unit": "SEK",
+                "status": "CALCULATED",
+                "period": "2026-09",
+                "lineage": {"accounts": [6540, 7010]},
+            },
+            {"id": "candidate_222", "value": "5000", "unit": "SEK", "status": "PARTIAL", "period": "2026-09"},
+            {
+                "id": "payroll_111",
+                "value": "9000",
+                "unit": "SEK",
+                "status": "CALCULATED",
+                "period": "2026-09",
+                "visibility": "INTERNAL",
+            },
+        ],
+    }
+
+    projected = period_commentary_input(package)
+    serialized = json.dumps(projected, ensure_ascii=False)
+
+    assert projected["period"]["spec"] == "2026-09"
+    assert projected["compare"]["spec"] == "2025-09"
+    assert projected["facts"] == [
+        {"id": safe_fact_id, "value": "120000", "unit": "SEK", "status": "CALCULATED", "period": "2026-09"},
+        {"id": "growth_456", "value": "0.12", "unit": "percent", "status": "CALCULATED", "period": "2026-09"},
+        {
+            "id": "cost_789",
+            "value": "-5000",
+            "unit": "SEK",
+            "status": "CALCULATED",
+            "period": "2026-09",
+            "accounts": [6540],
+        },
+        {"id": "candidate_222", "value": "5000", "unit": "SEK", "status": "PARTIAL", "period": "2026-09"},
+    ]
+    assert projected["bridge"]["components"][0]["source_level"] == "aggregated_account_bridge"
+    assert projected["findings"][0]["accounts"] == [6540]
+    assert projected["findings"][0]["evidence_count"] == 3
+    assert projected["findings"][0]["label"] == "förändring i återkommande kostnad"
+    assert "7010" not in serialized and "payroll_111" not in serialized
+    for forbidden in (
+        "Känsligt AB",
+        "Olofsson",
+        "lönespecifikation",
+        "voucher text",
+        "Do not send",
+        "private vendor",
+        "A55",
+        "secret",
+        "2710",
+    ):
+        assert forbidden not in serialized
+
+
+def test_ai_trace_redacts_payload_output_rejection_text_and_tool_arguments() -> None:
+    provider = FakeProvider(
+        responses={
+            "A3": lambda _content: {
+                "claims": [{"type": "HYPOTHESIS", "text": "Hemligt AB hade 98765 kr i kostnad.", "fact_ids": []}]
+            }
+        }
+    )
+    traces = []
+    service = AIService(provider, trace_sink=traces.append, keep_payloads=False)
+
+    outcome = service.run("A3", {"company": "Hemligt AB"}, FactStore(), org_id="org-1")
+
+    assert outcome.trace.package is None
+    assert outcome.trace.output is None
+    assert traces[0].package is None and traces[0].output is None
+    assert traces[0].rejected[0]["text"] == ""
+    assert traces[0].rejected[0]["reason"]
+    assert traces[0].tool_calls == []
 
 
 @pytest.fixture(scope="module")
@@ -154,6 +287,24 @@ def test_service_regenerates_then_drops_bad_claims(analysis, review) -> None:  #
     assert out.trace.rejected and "siffror" in out.trace.rejected[0]["reason"]
     assert "Underkändes" not in prov.calls[0]["user_content"]
     assert "underkändes" in prov.calls[1]["user_content"]
+
+
+def test_service_test_limits_one_attempt_and_output_tokens(analysis, review) -> None:  # type: ignore[no-untyped-def]
+    seen: list[int] = []
+
+    class CapturingProvider(FakeProvider):
+        def structured(self, **kwargs: Any) -> Any:
+            seen.append(kwargs["max_tokens"])
+            return super().structured(**kwargs)
+
+    prov = CapturingProvider(
+        {"A3": lambda _: {"claims": [{"type": "OBSERVATION", "text": "Omsättningen ökade 17 %.", "fact_ids": []}]}}
+    )
+    out = AIService(prov, max_output_tokens=1_500, max_attempts=1).run(
+        "A3", analysis.commentary_package(review), review.store, org_id="o1"
+    )
+    assert seen == [1_500]
+    assert out.trace.attempts == 1
 
 
 def test_service_masks_person_names(analysis, review) -> None:  # type: ignore[no-untyped-def]
@@ -325,7 +476,7 @@ def test_eval_suite_passes_with_fake_provider() -> None:
     results = run_evals(AIService(FakeProvider()))
     failed = [r.to_dict() for r in results if not r.passed]
     assert not failed, failed
-    assert {r.task for r in results} == {"A1", "A2", "A3", "A4"}
+    assert {r.task for r in results} == {"A1", "A2", "A3", "A4", "findings"}
 
 
 def test_rule_based_fallbacks_survive_verification() -> None:

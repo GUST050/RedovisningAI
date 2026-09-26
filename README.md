@@ -22,7 +22,7 @@ services/api/     Python 3.11+: SIE-parser, ekonomimotor, kontroller, AI-lager, 
     findings/     fyndens livscykel, undertryckning, precision per regel
     cases/        ärendebyggare (grupperar fynd efter trolig grundorsak)
     memory/       kundminne (tidigare bedömningar som förslag)
-    ai/           leverantörer (Bedrock/Vertex/Anthropic + failover), uppgifter A1–A8, verifierare,
+    ai/           leverantörer (Claude via Bedrock/Vertex/Anthropic samt OpenAI + failover), uppgifter A1–A8, verifierare,
                   pseudonymisering, analytikerns läsverktyg, evals
     db/           SQLAlchemy-modeller, radnivåskydd (RLS), versionerad import
     api/          FastAPI
@@ -30,7 +30,7 @@ services/api/     Python 3.11+: SIE-parser, ekonomimotor, kontroller, AI-lager, 
     connectors/   Fortnox (servicekonto, SIE4 per år, hastighetsbegränsning)
     reports/      PDF, Word och Excel (kundrapport, internrapport, Reko-dokumentation)
   migrations/     Alembic (schema, RLS-policyer, funktioner)
-  tests/          122 tester, bl.a. RLS-läckage genom PgBouncer i transaktionsläge
+  tests/          API-/databastester, bl.a. RLS-läckage genom PgBouncer i transaktionsläge
 apps/web/         Next.js 16: portfölj, kundens arbetsyta, publik svarssida, regler och inställningar
 docker-compose.yml, .github/workflows/ci.yml
 ```
@@ -118,10 +118,32 @@ sådana). Slå på med `RAI_AI_ENABLED=true` och välj plattform:
 | `bedrock` | AWS-nycklar, `RAI_AI_REGION` (t.ex. `eu-north-1`) | Data stannar i vald AWS-region |
 | `vertex` | GCP-projekt (`RAI_AI_PROJECT_ID`), region | Data stannar i vald GCP-region |
 | `anthropic` | `ANTHROPIC_API_KEY` | Direkt mot Anthropic |
+| `openai` | `OPENAI_API_KEY` | OpenAI Responses API; sätt rätt projekt och datavillkor innan riktiga kunddata används |
 
-`RAI_AI_SECONDARY_PLATFORM` ger failover. Personnamn maskeras innan anrop, lönerader och
+För en försiktig provkörning: sätt `RAI_AI_PLATFORM=openai` och `OPENAI_API_KEY` i din lokala
+`.env`, eller `RAI_AI_PLATFORM=anthropic` och `ANTHROPIC_API_KEY` för Claude. Sätt
+`RAI_AI_ENABLED=true` och starta om API och worker (`docker compose up -d --build api worker`).
+Hemligheterna ska finnas på servern, aldrig i webbläsaren, Git eller loggar. Du kan lägga in
+båda nycklarna och välja primär leverantör med `RAI_AI_PLATFORM`. I full drift kan du sätta
+`RAI_AI_SECONDARY_PLATFORM` till den andra leverantören; byte sker bara vid tillfälligt fel.
+För Claude i AWS/GCP används i stället `bedrock`/`vertex` och deras respektive behörigheter.
+
+`RAI_AI_TEST_MODE=true` är standard. Det begränsar AI till ett utkast utan omskrivning eller
+automatiska SDK-omförsök per uppgift, 1 500
+utdata-tokens per modellbegäran, tre läsverktygsanrop och högst 20 000 bokförda tokens per
+byrå och månad (eller byråns lägre budget). Analytikerns verktygsloop kan fortfarande göra
+flera modellbegäranden. Automatisk reservleverantör är avstängd i testläget.
+Ändra gränserna med `RAI_AI_TEST_*`. För full drift, sätt `RAI_AI_TEST_MODE=false` först efter
+egen utvärdering. Tokenbudgeten mäts efter ett svar och är därför **inte** ett absolut
+kostnadstak vid samtidiga anrop. Sätt också projektets utgiftsgräns hos leverantören.
+Testa först på syntetiska SIE-filer; en API-nyckel innebär inte att data skickas förrän AI
+aktiveras och en AI-funktion körs.
+
+`RAI_AI_SECONDARY_PLATFORM` ger failover i full drift. Personnamn maskeras innan anrop, lönerader och
 PTL-signaler skickas aldrig och varje påstående kontrolleras mot beräknade fakta innan det visas.
 AI-genererad text märks i gränssnittet (AI-förordningen art. 50).
+`store=false` används på OpenAI-anrop, men leverantörens övriga databehandling och eventuell
+EU-datalokalisering beror på projektets avtal och inställningar – verifiera detta separat.
 
 ## Säkerhet i korthet
 

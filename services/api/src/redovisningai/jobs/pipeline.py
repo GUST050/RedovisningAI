@@ -157,6 +157,7 @@ def import_sie(
             False,
             issues,
             {
+                "vouchers": len(doc.vouchers),
                 "added": outcome.added,
                 "changed": outcome.changed,
                 "removed": outcome.removed,

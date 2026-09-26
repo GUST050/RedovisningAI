@@ -31,6 +31,7 @@ from redovisningai.db.session import TenantContext, anonymous_session, tenant_se
 from redovisningai.findings.lifecycle import precision_by_rule
 from redovisningai.reports.builders import client_report, internal_report, reko_documentation, statements_tables
 from redovisningai.reports.document import Table, to_docx, to_pdf, to_xlsx
+from redovisningai.review.analysis import CompanyAnalysis
 from redovisningai.review.workflow import (
     ALLOWED_ATTACHMENT_TYPES,
     MAX_ATTACHMENT_BYTES,
@@ -118,6 +119,20 @@ def _file(data: bytes, fmt: str, name: str) -> Response:
     )
 
 
+def _analysis_metadata_current(analysis: CompanyAnalysis, metadata: dict[str, Any] | None) -> bool:
+    if not metadata or not metadata.get("source_fingerprint"):
+        return False
+    try:
+        from redovisningai.ai.tasks import A3_PROMPT_VERSION, A4_PROMPT_VERSION
+
+        expected_prompt = {"A3": A3_PROMPT_VERSION, "A4": A4_PROMPT_VERSION}.get(str(metadata.get("task")))
+        if expected_prompt is None or metadata.get("prompt_version") != expected_prompt:
+            return False
+        return analysis.draft_is_current(metadata, prompt_version=expected_prompt)
+    except (TypeError, ValueError):
+        return False
+
+
 def _findings_dicts(s: Session, company_id: uuid.UUID, period: str) -> list[dict[str, Any]]:
     from redovisningai.api.routes_review import _finding_dict
 
@@ -130,6 +145,7 @@ def report_client(
     company_id: uuid.UUID,
     period: str,
     format: str = "pdf",
+    compare: str | None = None,
     principal: Principal = Depends(get_principal),
     s: Session = Depends(db),
 ) -> Response:
@@ -138,14 +154,24 @@ def report_client(
     company = get_company(s, company_id)
     a = load_analysis(principal, company_id)
     p = a.period(period)
+    comparison = a.period(compare) if compare else same_period_previous_year(p, a.ledger)
     pr = s.scalar(
         select(m.PeriodReview).where(m.PeriodReview.company_id == company_id, m.PeriodReview.period == period)
     )
     # Bara ett av konsulten godkänt mötesunderlag får följa med till kunden.
     meeting = pr.client_report.get("data") if pr and pr.client_report and pr.client_report.get("approved") else None
-    doc = client_report(
-        a.overview(p), a.statements(p, same_period_previous_year(p, a.ledger)), meeting, principal.org_name
-    )
+    report_meta = (pr.client_report or {}).get("analysis_metadata") if pr and pr.client_report else None
+    if meeting is not None and (
+        not isinstance(report_meta, dict)
+        or report_meta.get("period") != p.spec
+        or report_meta.get("compare_period") != comparison.spec
+        or not _analysis_metadata_current(a, report_meta)
+    ):
+        raise HTTPException(
+            409,
+            "Mötesunderlaget bygger på äldre bokföringsdata eller periodjämförelse. Skapa, granska och godkänn ett nytt underlag.",
+        )
+    doc = client_report(a.overview(p, comparison), a.statements(p, comparison), meeting, principal.org_name)
     repo.audit(s, principal.ctx, "report.client_exported", company_id, period=period, format=format)
     data = to_pdf(doc) if format == "pdf" else to_docx(doc)
     return _file(data, format, f"{company.name} {period} kundrapport")
@@ -167,12 +193,20 @@ def report_internal(
     pr = s.scalar(
         select(m.PeriodReview).where(m.PeriodReview.company_id == company_id, m.PeriodReview.period == period)
     )
+    commentary = (pr.commentary or {}).get("data") if pr and pr.commentary else None
+    commentary_meta = (pr.commentary or {}).get("analysis_metadata") if pr and pr.commentary else None
+    commentary_stale = bool(commentary and not _analysis_metadata_current(a, commentary_meta))
+    if commentary_stale:
+        commentary = None
+    comparison = a.period(str(commentary_meta["compare_period"])) if commentary and commentary_meta else None
     doc = internal_report(
-        a.overview(p),
+        a.overview(p, comparison),
         _findings_dicts(s, company_id, period),
         list_cases(company_id, period, True, s),
-        (pr.commentary or {}).get("data") if pr else None,
+        commentary,
         a.maturity(p).to_dict(),
+        commentary_stale=commentary_stale,
+        commentary_metadata=commentary_meta if not commentary_stale else None,
     )
     repo.audit(s, principal.ctx, "report.internal_exported", company_id, period=period, format=format)
     return _file(
@@ -252,7 +286,19 @@ def export_xlsx(
     elif what == "transactions":
         from redovisningai.api.routes_company import transactions
 
-        tx = transactions(company_id, None, p.start, p.end, None, 1, 500, s)
+        first_page = transactions(company_id, None, p.start, p.end, None, 1, 500, s)
+        total = first_page["total"]
+        # Excel kan inte lagra fler än 1 048 576 rader inklusive rubrikraden.
+        if total > 1_048_575:
+            raise HTTPException(422, "För många transaktioner för en Excel-fil; välj en kortare period")
+        tx_rows = first_page["rows"]
+        page = 2
+        while len(tx_rows) < total:
+            next_rows = transactions(company_id, None, p.start, p.end, None, page, 500, s)["rows"]
+            if not next_rows:
+                raise HTTPException(409, "Transaktionerna ändrades under exporten; försök igen")
+            tx_rows.extend(next_rows)
+            page += 1
         sheets = [
             (
                 "Transaktioner",
@@ -267,7 +313,7 @@ def export_xlsx(
                             r["account_name"],
                             r["amount"],
                         ]
-                        for r in tx["rows"]
+                        for r in tx_rows
                     ],
                     numeric_cols={5},
                 ),
@@ -420,20 +466,33 @@ def audit_log(company_id: uuid.UUID | None = None, limit: int = 200, s: Session 
 
 @admin.get("/ai/status")
 def ai_status(principal: Principal = Depends(get_principal), s: Session = Depends(db)) -> dict[str, Any]:
+    from redovisningai.ai.factory import build_provider
     from redovisningai.config import get_settings
 
     st = get_settings()
     month = datetime.now().strftime("%Y-%m")
     used = s.scalar(select(m.AIUsage.tokens).where(m.AIUsage.month == month)) or 0
     org = s.get(m.Organization, principal.org_id)
+    models = (
+        {"strong": st.openai_model_strong, "medium": st.openai_model_medium, "small": st.openai_model_small}
+        if st.ai_platform == "openai"
+        else {"strong": st.ai_model_strong, "medium": st.ai_model_medium, "small": st.ai_model_small}
+    )
+    monthly_budget = org.ai_monthly_token_budget if org else None
+    if st.ai_test_mode and monthly_budget is not None:
+        monthly_budget = min(monthly_budget, st.ai_test_monthly_token_cap)
     return {
-        "enabled": st.ai_enabled,
+        "enabled": build_provider(st) is not None,
+        "requested": st.ai_enabled,
         "platform": st.ai_platform,
-        "region": st.ai_region,
-        "secondary": st.ai_secondary_platform,
-        "models": {"strong": st.ai_model_strong, "medium": st.ai_model_medium, "small": st.ai_model_small},
+        "region": st.ai_region if st.ai_platform in {"bedrock", "vertex"} else None,
+        "secondary": st.ai_secondary_platform if not st.ai_test_mode else None,
+        "models": models,
         "tokens_used_this_month": used,
-        "monthly_budget": org.ai_monthly_token_budget if org else None,
+        "monthly_budget": monthly_budget,
+        "test_mode": st.ai_test_mode,
+        "test_max_output_tokens": st.ai_test_max_output_tokens if st.ai_test_mode else None,
+        "test_max_tool_calls": st.ai_test_max_tool_calls if st.ai_test_mode else None,
         "notice": "AI-genererade texter märks i gränssnittet (AI Act art. 50) och granskas av konsulten.",
     }
 

@@ -6,6 +6,8 @@ nyckeltal och bryggor → AI-paket. Ingen databas här; persistens sker i db-lag
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
@@ -14,6 +16,7 @@ from typing import Any
 
 from redovisningai.accounting.balances import AccountSet, LedgerIndex
 from redovisningai.accounting.categories import CategoryMapping, cost_tree
+from redovisningai.accounting.comparisons import validate_comparison
 from redovisningai.accounting.metrics import CORE_METRICS, calculate_metric, change_fact, change_pct_fact
 from redovisningai.accounting.periods import (
     Period,
@@ -29,7 +32,7 @@ from redovisningai.accounting.statements import StatementMapping, balance_sheet,
 from redovisningai.accounting.variance import category_bridge, drilldown, line_accounts, result_bridge
 from redovisningai.cases.builder import Case, build_cases
 from redovisningai.domain.ledger import Ledger
-from redovisningai.facts.model import FactStore, Visibility
+from redovisningai.facts.model import CALC_VERSION, FactStatus, FactStore, Visibility
 from redovisningai.findings.lifecycle import FindingRecord, SuppressionRule, reconcile
 from redovisningai.maturity.assess import AccountingMethod, Maturity, assess
 from redovisningai.memory.resolutions import Resolution, apply_memory
@@ -166,22 +169,26 @@ class CompanyAnalysis:
             )
             entry: dict[str, Any] = {"id": cur.id, "fact": cur.to_dict()}
             if compare is not None:
+                pair = validate_comparison(period, compare, self.index)
                 prev = calculate_metric(
                     code, self.index, compare, store=store, mapping=self.ctx.statement_mapping, rates=self.rates
                 )
                 entry["previous"] = prev.to_dict()
-                ch = change_fact(store, cur, prev, compare.label)
-                if ch is not None:
-                    entry["change_id"] = ch.id
-                    entry["change"] = ch.to_dict()
-                chp = change_pct_fact(store, cur, prev)
-                if chp is not None:
-                    entry["change_pct_id"] = chp.id
-                    entry["change_pct"] = chp.to_dict()
+                entry["comparison_status"] = pair.status.value
+                entry["comparison_warnings"] = list(pair.warnings)
+                if pair.status in (FactStatus.CALCULATED, FactStatus.PARTIAL):
+                    ch = change_fact(store, cur, prev, compare.label)
+                    if ch is not None:
+                        entry["change_id"] = ch.id
+                        entry["change"] = ch.to_dict()
+                    chp = change_pct_fact(store, cur, prev)
+                    if chp is not None:
+                        entry["change_pct_id"] = chp.id
+                        entry["change_pct"] = chp.to_dict()
             out[code] = entry
         return out
 
-    def overview(self, period: Period) -> dict[str, Any]:
+    def overview(self, period: Period, compare: Period | None = None) -> dict[str, Any]:
         store = FactStore()
         mat = self.maturity(period)
         fy = self.ledger.year_for(period.end)
@@ -191,7 +198,7 @@ class CompanyAnalysis:
         periods["r12"] = rolling(period.end, 12)
         sections = {}
         for key, p in periods.items():
-            cmp_ = same_period_previous_year(p, self.ledger)
+            cmp_ = compare if compare is not None and key == "month" else same_period_previous_year(p, self.ledger)
             sections[key] = {
                 "period": {"spec": p.spec, "label": p.label},
                 "compare": {"spec": cmp_.spec, "label": cmp_.label},
@@ -284,11 +291,62 @@ class CompanyAnalysis:
         ids |= {str(v.key) for v in self.ledger.all_vouchers()}
         return ids
 
-    def commentary_package(self, review: ReviewResult) -> dict[str, Any]:
+    def source_fingerprint(self, current: Period, previous: Period, *, prompt_version: str) -> str:
+        """Stabilt analysfingeravtryck för periodpar, bokföring och beräkningsregler."""
+        years = [
+            {
+                "fiscal_year": [year.fiscal_year.start.isoformat(), year.fiscal_year.end.isoformat()],
+                "opening": sorted((account, str(value)) for account, value in year.opening.items()),
+                "closing": sorted((account, str(value)) for account, value in year.closing.items()),
+                "result": sorted((account, str(value)) for account, value in year.result.items()),
+                "period_balances": sorted(
+                    (period.isoformat(), account, str(value))
+                    for (period, account), value in year.period_balances.items()
+                ),
+                "vouchers": sorted((str(voucher.key), voucher.content_hash()) for voucher in year.vouchers),
+            }
+            for year in self.ledger.years
+        ]
+        payload = {
+            "periods": [current.spec, previous.spec],
+            "years": years,
+            "statement_mapping": self.ctx.statement_mapping.version,
+            "category_mapping": self.ctx.category_mapping.version,
+            "rates": [
+                (
+                    rate.code,
+                    rate.value,
+                    rate.valid_from.isoformat(),
+                    rate.valid_to.isoformat() if rate.valid_to else None,
+                )
+                for rate in self.rates.rates
+            ],
+            "calculation": CALC_VERSION,
+            "prompt": prompt_version,
+        }
+        return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+
+    def draft_is_current(self, metadata: dict[str, Any] | None, *, prompt_version: str) -> bool:
+        """Validera ett sparat utkast mot aktuell bokföring, periodpar och promptversion."""
+        if not metadata or metadata.get("prompt_version") != prompt_version:
+            return False
+        try:
+            current = self.period(str(metadata["period"]))
+            previous = self.period(str(metadata["compare_period"]))
+        except (KeyError, TypeError, ValueError):
+            return False
+        return bool(
+            metadata.get("source_fingerprint")
+            == self.source_fingerprint(current, previous, prompt_version=prompt_version)
+        )
+
+    def commentary_package(self, review: ReviewResult, *, compare_spec: str | None = None) -> dict[str, Any]:
         p = review.period
-        fy = self.ledger.year_for(p.end)
-        analysis_period = ytd(fy.fiscal_year, p.end) if fy else p
-        compare = same_period_previous_year(analysis_period, self.ledger)
+        # Use the reviewed month and its year-ago month by default. An explicit
+        # comparison opts into the selected period without changing current.
+        analysis_period = p
+        compare = self.period(compare_spec) if compare_spec else same_period_previous_year(analysis_period, self.ledger)
+        comparison = validate_comparison(analysis_period, compare, self.index)
         store = review.store
         metrics = self.metric_facts(analysis_period, compare, store, low_maturity=review.maturity.low_periodization)
         bridge = result_bridge(self.index, analysis_period, compare, mapping=self.ctx.statement_mapping, store=store)
@@ -297,6 +355,8 @@ class CompanyAnalysis:
             "company": self.ctx.name,
             "period": {"spec": analysis_period.spec, "label": analysis_period.label},
             "compare": {"spec": compare.spec, "label": compare.label},
+            "comparison_status": comparison.status.value,
+            "comparison_warnings": list(comparison.warnings),
             "metrics": {
                 k: {
                     "id": v["id"],
@@ -314,7 +374,11 @@ class CompanyAnalysis:
                         "label": c.label,
                         "effect": str(c.effect),
                         "fact_id": c.fact_id,
-                        "display": store.get(c.fact_id).to_dict()["display"] if c.fact_id else None,
+                        "display": (
+                            fact.to_dict()["display"]
+                            if c.fact_id and (fact := store.get(c.fact_id)) is not None
+                            else None
+                        ),
                     }
                     for c in bridge.components
                 ]
@@ -327,9 +391,9 @@ class CompanyAnalysis:
             "facts": [f.to_dict() for f in store if f.visibility is not Visibility.RESTRICTED_AML][:200],
         }
 
-    def client_package(self, review: ReviewResult) -> dict[str, Any]:
+    def client_package(self, review: ReviewResult, *, compare_spec: str | None = None) -> dict[str, Any]:
         """Paket för kundmötesagenten: bara CLIENT_SAFE-fakta, inga PTL-uppgifter."""
-        base = self.commentary_package(review)
+        base = self.commentary_package(review, compare_spec=compare_spec)
         safe_ids = {f.id for f in review.store if f.visibility is Visibility.CLIENT_SAFE}
         base["facts"] = [f for f in base["facts"] if f["id"] in safe_ids]
         base.pop("open_cases", None)

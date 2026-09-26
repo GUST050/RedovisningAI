@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 
@@ -16,14 +17,15 @@ PG_PORT = os.environ.get("RAI_TEST_PG_PORT", "54329")
 PG_ADMIN = os.environ.get("RAI_TEST_PG_ADMIN_URL", f"postgresql+psycopg://postgres@{PG_HOST}:{PG_PORT}/postgres")
 TEST_DB = "rai_test"
 OWNER_URL = PG_ADMIN.rsplit("/", 1)[0] + f"/{TEST_DB}"
-APP_URL = f"postgresql+psycopg://redovisningai_app:app@{PG_HOST}:{PG_PORT}/{TEST_DB}"
+APP_PASSWORD = quote(os.environ.get("RAI_TEST_APP_DB_PASSWORD", "app"), safe="")
+APP_URL = f"postgresql+psycopg://redovisningai_app:{APP_PASSWORD}@{PG_HOST}:{PG_PORT}/{TEST_DB}"
 
-os.environ.setdefault("RAI_DATABASE_URL_OWNER", OWNER_URL)
-os.environ.setdefault("RAI_DATABASE_URL", APP_URL)
-os.environ.setdefault("RAI_STORAGE_PATH", tempfile.mkdtemp(prefix="rai-storage-"))
-os.environ.setdefault("RAI_ENV", "test")
+os.environ["RAI_DATABASE_URL_OWNER"] = OWNER_URL
+os.environ["RAI_DATABASE_URL"] = APP_URL
+os.environ["RAI_STORAGE_PATH"] = tempfile.mkdtemp(prefix="rai-storage-")
+os.environ["RAI_ENV"] = "test"
 # Testerna kontrollerar att oinloggade anrop nekas – ingen automatisk standardanvändare.
-os.environ.setdefault("RAI_DEV_DEFAULT_USER", "")
+os.environ["RAI_DEV_DEFAULT_USER"] = ""
 
 
 def _pg_available() -> bool:

@@ -148,7 +148,11 @@ function SieUpload({ base, onDone }: { base: string; onDone: () => void }) {
       >
         <p className="mb-2 text-muted">Dra hit en SIE4-fil (.se/.si) eller</p>
         <Button variant="secondary" disabled={busy} onClick={() => input.current?.click()}>{busy ? "Importerar och granskar…" : "Välj fil"}</Button>
-        <input ref={input} type="file" accept=".se,.si,.sie,.txt" className="hidden" onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
+        <input ref={input} type="file" accept=".se,.si,.sie,.txt" className="hidden" onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = "";
+          if (file) upload(file);
+        }} />
         <p className="mt-2 text-[11px] text-muted">Filen krypteras och sparas som underlag. Samma fil två gånger importeras inte igen.</p>
       </div>
       <div className="mt-3 space-y-2">

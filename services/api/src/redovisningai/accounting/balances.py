@@ -199,11 +199,15 @@ class LedgerIndex:
         `include_closing_entries=True` blir resultatet 0 när bokslutet redan är fört – det är
         det som ska läggas till eget kapital i en balansräkning.
         """
+        return sum(self.result_by_account_at(at, include_closing_entries=include_closing_entries).values(), ZERO)
+
+    def result_by_account_at(self, at: date, *, include_closing_entries: bool = False) -> dict[int, Decimal]:
+        """Resultatets kontobidrag t.o.m. datum, med samma datumgräns som result_to_date."""
         year = self.ledger.year_for(at)
         if year is None:
-            return ZERO
+            return {}
         upper = 8999 if include_closing_entries else 8989
-        total = ZERO
+        amounts: dict[int, Decimal] = defaultdict(lambda: ZERO)
         for m in months_between(year.fiscal_year.start, at):
             month_mv = self.movements.get(m, {})
             if m == month_start(at) and at < _month_last_day(m):
@@ -211,12 +215,12 @@ class LedgerIndex:
                     if v.date <= at:
                         for r in v.effective_rows:
                             if 3000 <= r.account <= upper:
-                                total += r.amount
+                                amounts[r.account] -= r.amount
                 continue
             for acc, amt in month_mv.items():
                 if 3000 <= acc <= upper:
-                    total += amt
-        return -total
+                    amounts[acc] -= amt
+        return {account: amount for account, amount in amounts.items() if amount != ZERO}
 
     def vouchers_in(self, period: Period) -> list[Voucher]:
         out: list[Voucher] = []

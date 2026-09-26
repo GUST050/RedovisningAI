@@ -495,6 +495,216 @@ Orkestreringen är kod (jobbkön). Varje uppgift har fast verktygsuppsättning, 
 - Batch för A1, A2 och A7 (nattligt). Prompt-cache för stabila systemprompter.
 - **Budget:** AI-kostnad < 10 % av intäkten per klient-månad. Mäts per uppgift och byrå. Hård spärr per byrå.
 
+### 9.7 Spårbar jämförelse och förklaring av varje nyckeltal (design 2026-09-25)
+
+**Status:** skriftlig specifikation för granskning; inte implementerad. Detta är en utbyggnad av
+befintliga `MetricDefinition`, `FactStore`, perioder, variansbryggor och A3/A5 – inte en ny
+ekonomimotor. Målet är att konsulten utan egen Excel-utredning ska kunna se *vad* som ändrat
+ett nyckeltal och vilka bokföringsposter som stöder förklaringen. Programmet kan belägga en
+bokföringsmässig påverkan; det kan inte ur SIE4 ensamt slå fast en affärsorsak som prisbeslut,
+kundtapp eller volymförändring. Sådana påståenden märks hypotes tills relevant underlag finns.
+
+#### Omfattning och periodkontrakt
+
+- Alla nyckeltal i `REGISTRY` använder samma jämförelse- och förklaringskontrakt, även de som
+  inte ingår i översiktens `CORE_METRICS`. För varje tal visas värde nu, jämförelsevärde,
+  förändring i rätt enhet (kr eller procentenheter), beräkningsformel och datastatus.
+- Användaren kan välja föregående månad, samma månad i fjol, jämförbart hittills-i-år, två hela
+  räkenskapsår eller två rullande 12-månadersperioder. Standard för månad är samma månad i fjol;
+  föregående månad är ett tydligt alternativ. För YTD jämförs samma antal månader räknat från
+  respektive räkenskapsårs början. För helår används föregående hela räkenskapsår, även vid
+  brutet räkenskapsår. Explicit valda perioder måste ha samma typ och längd. Förlängda eller
+  förkortade räkenskapsår får inte presenteras som direkt jämförbara utan separat varning och
+  begränsad förklaring; ingen tyst uppräkning till årstakt.
+- En jämförelse är `INSUFFICIENT_DATA` när någon nödvändig månad saknas. Ett saknat år eller
+  konto i en saknad period är **inte noll**. `change_fact` och procentuell förändring får bara
+  skapas när båda fakta är beräkningsbara; preliminära perioder ska behålla status `PARTIAL`
+  och tydlig mognadsvarning. Noll nämnare ger `NOT_APPLICABLE`, inte oändlighet eller ett
+  AI-gissat procenttal.
+
+#### Beräkning och evidenskedja
+
+- En `MetricExplanation` byggs deterministiskt för ett nyckeltal och ett validerat periodpar.
+  Den innehåller faktavärden, status, ordnade bidrag, jämförelsemetod, mappnings-/beräknings-
+  version och källversion. Varje bidrag kan följas till resultatrad eller balanspost, konto
+  och – när källan innehåller verifikationer – verifikationsrad med verifikationsnummer, datum
+  och källrad/import. Detaljvyn visar båda periodernas relevanta poster; ett urval av topposter
+  följs alltid av en explicit summerad `övriga`-rad, så att urvalet inte ser ut att vara hela
+  förklaringen.
+- Additiva tal som nettoomsättning och rörelseresultat bryts ned med samma teckenkonvention
+  som resultatrapporten. Summan av samtliga bidrag ska vara exakt lika med nyckeltalets
+  förändring. Balansnyckeltal förklaras från respektive slutdags saldo och dess ingående
+  saldo/rörelser; vid jämförelser över årsskiften får systemet inte felaktigt beskriva två
+  separata års verifikationer som en direkt transaktionsdifferens. Om en obruten rörelsekedja
+  saknas visas konto-/saldoförändring och begränsningen, inte en uppfunnen brygga.
+- Kvoter/marginaler (`N/D × 100`) får en symmetrisk tvåfaktorbrygga: täljarbidraget är
+  `100 × (N₁−N₀) × (1/D₀+1/D₁)/2` och nämnarbidraget är
+  `100 × (N₀+N₁) × (1/D₁−1/D₀)/2`. Bidragen summerar exakt till den orundade förändringen.
+  Täljaren kan därefter brytas ned till sina resultat-/balansrader, men denna undernivå
+  adderas inte en gång till till kvotens total. Beräkning sker med `Decimal`; avrundning sker
+  i presentationen, och eventuell visningsdifferens visas som `avrundning` så att även den
+  visade bryggan stämmer med den visade förändringen. Om en beräkningsparameter, till exempel
+  bolagsskattesatsen i soliditet, har ändrats ska dess påverkan särredovisas inom täljarens
+  bidrag och inte tillskrivas en bokföringstransaktion.
+- Verifikationer med rättelser/återföringar hanteras via effektiva rader och periodernas
+  faktiska bokföringsdatum. `Ny`, `upphört` eller `ändrat` används bara när identiteten är
+  tillförlitlig. SIE4-text får inte ensam bevisa leverantör eller styckpris. Motpartsnamn
+  härledda ur fritext märks med konfidens; faktura-/organisationsnummer kan ge starkare länk
+  först när den datakällan faktiskt används i analysen.
+- Om en källa bara har periodsaldon (`#PSALDO`) visas beräkningsbara nyckeltal och kontobrygga men
+  evidensnivån `verifikationer saknas`. Om underlaget är ofullständigt eller mappningen ändrats
+  visas detta före varje AI-text. Ett klick på ett faktapåstående ska kunna öppna dess
+  `Fact` och de underliggande kontona/verifikationerna från samma datasetversion.
+
+#### Gränssnitt, API och AI-flöde
+
+- Översikten får en synlig jämförelseväljare. Nyckeltalskort öppnar en förklaringsvy med
+  nivåerna **nyckeltal → bidrag → konto → verifikationer i båda perioderna** och en separat
+  märkning för `fakta`, `bokföringsförklaring` respektive `hypotes`. Valda perioder och
+  databegränsningar följer med till intern kommentar och rapport som ett sparat periodpar;
+  om inget explicit val sparats används den dokumenterade standardjämförelsen. UI och export
+  får inte använda olika jämförelser utan att säga det.
+- Ett lätt jämförelsesvar returnerar samtliga nyckeltal utan att hämta alla verifikationer.
+  Ett separat detaljsvar hämtar en `MetricExplanation` för valt nyckeltal och periodpar.
+  Befintliga `/overview`, `/explain` och A5-verktyg kan återanvända motorn; äldre svar måste
+  fortsätta fungera tills klienten migrerats. Servern validerar samma bolag, tillåtna perioder,
+  källversion och läsbehörighet före hämtning.
+- Efter import/granskning beräknas förklaringar för alla tillämpliga nyckeltal. En
+  deterministisk prioritering väljer ett fåtal väsentliga, nya och tillförlitliga förändringar
+  till A3:s automatiska interna analys; resten är tillgängliga vid klick eller via A5:s
+  läsverktyg. AI får bara ett begränsat evidenspaket med `fact_id`, status och källhänvisningar,
+  aldrig uppdraget att räkna differenser. Den skriver strukturerade påståenden enligt §9.2.
+  En serververifierare avvisar okända fakta, egna tal och orsakspåståenden utan stöd.
+- Kandidater för tvärgående samband upptäcks också deterministiskt: exempelvis fallande
+  omsättning samtidigt med stigande fasta kostnader, en kostnadsandel som ökar trots
+  oförändrade kronor eller återkommande konto-/motpartsförändringar över flera månader.
+  Underlaget visar båda signalerna och deras perioder. AI får beskriva sambandet och föreslå
+  en kontroll, men samtidighet räcker inte som bevis för orsak eller enhetspris/volym.
+- AI-text är ett utkast som konsulten kan redigera och godkänna. Ingen kundrapport eller
+  fråga skickas automatiskt. Om modell, region eller budget saknas visas den deterministiska
+  förklaringen och en tydlig `AI ej tillgänglig`-status, inte en tom analys. AI-svar cachelagras
+  per bolag, dataset-/mappningsversion, periodpar, uppgift och prompt-/modellversion; en
+  ändrad import gör gamla svar inaktuella. Befintlig failover mellan OpenAI och Claude är
+  inte dubbelgranskning. En eventuell oberoende andra modell används selektivt för högt
+  prioriterade/osäkra påståenden först efter separat eval och kostnadstak; den får aldrig
+  ersätta den deterministiska kontrollen.
+
+#### Godkännandekriterier och testfall
+
+1. Samtliga `REGISTRY`-nyckeltal har giltigt jämförelsesvar eller explicit status. Additiva
+   bryggor och kvotbryggor summerar exakt före avrundning; visade bidrag stämmer med visad
+   förändring inklusive eventuell avrundningsrad.
+2. Golden tests omfattar föregående månad, samma månad föregående år, YTD, R12 och hela
+   räkenskapsår, inklusive brutet och förlängt/förkortat år, noll nämnare, saknad månad,
+   `#PSALDO` utan verifikationer, rättelser och återföringar.
+3. Integrations- och UI-test visar en klickbar kedja från ett förändrat nyckeltal till
+   konton och verifikationer i **båda** perioderna. Topp-N + `övriga` ska stämma med totalen.
+   Ändrad mappning/import får inte återanvända ett gammalt AI-svar.
+4. AI-evals kontrollerar rätt periodpar, korrekta `fact_id`, noll belopp utan verifierat stöd,
+   noll obelagda kausala påståenden, korrekt märkta begränsningar samt att en konsult kan
+   godkänna/avvisa varje prioriterad slutsats. Mät relevanta fynd bland de översta, falsklarm
+   per kundmånad, evidensens tillräcklighet, tid per granskning och AI-kostnad jämfört med
+   nuvarande flöde på samma låsta testdata.
+
+**Inte i denna ändring:** automatisk bokföring, bevis för kommersiell orsak från endast SIE,
+egen prognosmotor, ny fri SQL-agent eller ett krav på att två modeller körs på varje kundmånad.
+
+### 9.8 Proaktiv analys av nyckeltal och transaktionsmönster (design 2026-09-25)
+
+**Status:** godkänd design för genomförandeplanering; inte implementerad. Den
+utökar §9.7, särskilt A3:s automatiska analys och A5:s läsverktyg. Målet är att varje konsult
+ska få några få relevanta, granskningsbara fynd direkt efter import/granskning – utan att
+behöva formulera rätt fråga – och kunna följa dem från nyckeltal till transaktioner. En
+modelltext som bara sammanfattar ett diagram uppfyller inte målet. Framgång mäts som minskad
+granskningstid utan ökning av obelagda påståenden eller falsklarm jämfört med nuvarande flöde.
+
+#### Datakontrakt och evidensnivå
+
+- Analys körs på ett låst bolag och datasetfingeravtryck, validerat periodpar, mappnings-/
+  beräkningsversion och användarens behörighet. Alla belopp, procentenheter och bidrag kommer
+  från §9.7:s deterministiska motor. Saknad månad, preliminär period, ändrad mappning eller
+  obalans blir synlig begränsning före ett prioriterat fynd.
+- Evidensnivån är explicit per påstående: **periodsaldo**, **konto/verifikation**, eller
+  **strukturerad faktura-/orderrad** med verifierad koppling. SIE4 innehåller verifikationer
+  men transaktionstext och kvantitet är frivilliga; SIE-rader ensamma får därför inte bevisa
+  leverantörsidentitet, styckpris, försäljningsvolym eller kommersiell orsak. Pris/volym-analys
+  aktiveras först när faktura-/orderrader med entydig artikel/enhet/antal/pris har hämtats,
+  länkats och avstämts till bokföringen. En sammanfattande `#PSALDO`-källa får bara saldo-
+  och kontoförklaring.
+- Motpartsgruppering använder i första hand strukturerat id; normalisering från fritext är
+  ett osäkert förslag med visad konfidens, aldrig en dold sammanslagning av bolag. Fyndet
+  behåller originalverifikation, effektiv rad, bokföringsdatum, import, källhash och båda
+  periodernas urval så att det kan reproduceras efteråt.
+
+#### Fyndmotor före modellen
+
+- `MetricExplanation` från §9.7 ger exakt påverkan för varje nyckeltal. Ovanpå denna byggs
+  separata, testbara kandidater för: ovanligt stor konto-/kategoriändring; ny, upphörd eller
+  stegvis ändrad återkommande kostnad; ändrad frekvens/antal verifikationer; möjlig dubbel
+  kostnad som kräver kontroll; rättelser/återföringar; samt kombinationer som fallande
+  omsättning och stigande kostnader. Samma kandidat får länka flera nyckeltal och en
+  gemensam transaktionsgrupp, så flera kort inte upprepar samma underliggande fynd.
+- Normalbasen är bolagets egen historik. Jämför med samma månad föregående år och robust
+  rullande nivå där tillräcklig historik finns; markera säsong, engångsposter, bokslut och
+  ändrad periodiseringsgrad. Utan tillräcklig historik visas en enkel förändring med lägre
+  evidensnivå, inte en påhittad statistisk avvikelsesannolikhet. En bokföringsmässig
+  samvariation är inte en bevisad kausal relation eller en brottsindikator.
+- Kandidater prioriteras deterministiskt efter beloppsmässig väsentlighet, förändringens
+  nyhet/uthållighet, datatäckning, evidensstyrka och om fyndet ger konsulten en konkret
+  möjlig kontroll. Reglernas trösklar och versioner loggas. Visa högst fem huvudfynd som
+  standard, med möjlighet att se alla kandidater och varför andra sorterades ned. Ett
+  modellpoängtal får inte ensamt styra prioriteten.
+
+#### Avgränsad AI-utredning och kontroll
+
+- Först efter att fyndkandidaterna skapats får A3 ett litet, versionsbundet evidenspaket med
+  `fact_id`, perioder, status och begränsningar. AI kan vid behov använda A5:s kundbundna,
+  läsande verktyg för konto-, motparts- och månadsserier samt valda verifikationer i båda
+  perioderna. Verktygen validerar bolag, behörighet, tillåten period och returformat på
+  serversidan. Ingen fri SQL, webbsökning, filskrivning, bokföring eller kundkontakt ges till
+  modellen. Sätt gränser för antal verktygsanrop, hämtade rader, tokens, tid och kostnad.
+- SIE-/fakturatext skickas som opålitlig data, inte instruktion. Paketet minimeras och
+  pseudonymiseras; lönerader går bara aggregerat till AI och PTL-uppgifter går inte till denna
+  analys. Byrå/bolag hålls isär även i cache och spår. Extern modellbehandling för riktiga
+  kunduppgifter kräver kontrollerade avtals-, integritets- och regioninställningar.
+- AI returnerar ett strukturerat fyndutkast med `observation`, `bokföringsförklaring`,
+  `möjlig_affärsorsak`, `föreslagen_kontroll`, `fact_ids`, `databegränsningar` och
+  `evidensnivå`. Servern räknar inte om med AI:s text utan verifierar alla fact-id, numeriska
+  värden, periodpar, källversion och behörighet. Ett påstående om affärsorsak utan ytterligare
+  relevant underlag nedgraderas till hypotes även om det finns en korrekt resultatbrygga.
+  Ogiltigt svar visas inte; deterministisk analys och `AI ej tillgänglig` finns kvar.
+- Konsulten ser fakta, bokföringspåverkan och hypotes åtskilda, kan öppna alla underlag,
+  korrigera/avvisa/godkänna fynd per slutsats och spara en motivering. Endast godkända
+  slutsatser får gå vidare till rapport eller kundfråga. Ingen extern handling sker
+  automatiskt. Ny import eller ny mappning markerar både fynd och AI-text inaktuella.
+- OpenAI och Claude stöds via samma uppgifts- och evidenskontrakt. En modell undersöker ett
+  fynd åt gången med befintlig failover. En andra, oberoende modell är ett selektivt
+  experiment för högt väsentliga/osäkra fynd, inte standarddrift; inför den först om en
+  jämförande eval visar bättre precision i relation till latens och kostnad. Den
+  deterministiska verifieraren förblir obligatorisk i båda fallen.
+
+#### Verifiering före lansering
+
+1. Golden tests för bokföringsbryggor och kandidater: säsongsvariation, engångskostnad,
+   genuin nivåförskjutning, rättelse/återföring, nästan lika motpartsnamn, möjlig dubbel
+   kostnad, faktura med och utan kvantitet, saknad jämförelsemånad och `#PSALDO` utan
+   verifikationer. Alla numeriska fynd måste stämma exakt mot låst dataset.
+2. Säkerhetstester: annat bolag/byrå, roll utan lönebehörighet, PTL-skydd, promptinjektion i
+   verifikationstext, överstora verktygsanrop, budgetstopp och modellavbrott. Inget av detta
+   får ge dataläckage eller blockera den deterministiska översikten.
+3. Blindad pilot på representativa, avslutade kundmånader med konsultbedömda fynd.
+   Jämför mot samma nuvarande arbetsflöde: precision bland fem första fynden, falsklarm per
+   kundmånad, täckning av väsentliga fynd, andel korrekta faktahänvisningar, tid till beslut
+   och kostnad per analyserad kundmånad. Syntetiska exempel används för gränsfall men får
+   inte ensamma räcka som kvalitetsbevis. Dokumentera även varför avvisade fynd var fel.
+4. Inför ingen svartlådemodell för anomalier förrän den på samma låsta pilotdata ger bättre
+   nytta än den tolkningsbara baslinjen och dess fynd kan förklaras på konto-/verifikationsnivå.
+
+**Avgränsning:** detta är inte automatisk bokföring, bedrägeribedömning, kausalbevis från
+samtidiga rörelser, fri agentåtkomst till kundsystem eller ett krav på en modellkörning per
+transaktion. Genomförandeplanen längst ned i filen omfattar nu både §9.7 och §9.8;
+produktkod ändras först efter att genomförandeplanen godkänts separat.
+
 ---
 
 ## 10. Arbetsflöde, UX och rapporter
@@ -717,4 +927,220 @@ Orkestreringen är kod (jobbkön). Varje uppgift har fast verktygsuppsättning, 
 - RLS och PgBouncer: <https://dev.to/qays_kadhim_c3fea1c94957f/the-set-local-advice-is-right-and-it-understates-the-problem-1f62>, <https://seedfa.st/blog/pgbouncer-transaction-mode>
 - Procrastinate: <https://github.com/procrastinate-org/procrastinate>
 
+**Primärkällor för §9.8:s analysarkitektur (research 2026-09-25)**
+- SIE-Gruppens formatöversikt och SIE4-specifikation: <https://sie.se/format/>, <https://sie.se/wp-content/uploads/2020/05/SIE_filformat_ver_4B_080930.pdf> (verifikationer finns i typ 4; text/kvantitet kan saknas).
+- Gronewald m.fl., hybrid journal-entry-detektering: <https://arxiv.org/abs/2609.18228> (pågående forskning med syntetiska data, inte produktionsbevis). Müller m.fl., tolkningsbar avvikelseförklaring: <https://arxiv.org/abs/2209.09157>.
+- OpenAI och Anthropic om verktygsanrop: <https://developers.openai.com/api/docs/guides/function-calling>, <https://platform.claude.com/docs/en/agents-and-tools/tool-use/how-tool-use-works>. OpenAI om agentutvärdering och injektionsrisk: <https://developers.openai.com/api/docs/guides/agent-evals>, <https://developers.openai.com/api/docs/guides/agent-builder-safety>.
+- NIST AI RMF om mätning/uppföljning: <https://airc.nist.gov/airmf-resources/airmf/5-sec-core/>. IMY:s vägledning om generativ AI och personuppgifter: <https://www.imy.se/globalassets/dokument/rapporter/gdpr-vid-anvandning-av-generativ-ai_imy-2024-9162.pdf>.
+
 > **Förbehåll:** flera källor är sekundära (bloggar, sammanställningar) och vissa sidor kunde inte läsas i sin helhet. Siffror om marknadsandelar, priser och licenskostnader samt alla regeldetaljer ska verifieras mot primärkällor och med en auktoriserad redovisningskonsult och jurist innan de används i produkt eller försäljning.
+
+---
+
+# Spårbar nyckeltalsanalys Implementation Plan
+
+> **För genomförande:** läs §9.7 och denna plan före kodändring. Arbeta testdrivet i den ordning som står nedan och granska varje färdig del. Ingen commit eller push utan användarens uttryckliga begäran.
+
+**Goal:** Konsulten kan jämföra alla registrerade nyckeltal mellan jämförbara perioder, se en avstämd kedja till bokföringsposter och få högst fem automatiskt prioriterade, granskningsbara fynd om nyckeltal och transaktionsmönster. AI utreder utvalda fynd men skapar inte siffror eller beslutar om rapportering.
+
+**Architecture:** Befintlig `LedgerIndex`/`MetricDefinition` förblir källa till tal. En deterministisk förklaringsmodul beräknar periodpar, bidrag och evidens; en separat fyndmotor skapar och rankar kandidater. API/UI och A3/A5 använder samma versionsbundna resultat. A3 får endast utvalda fakta och kundbundna läsverktyg; servern verifierar strukturerade utkast, medan konsulten äger godkännandet.
+
+**Tech Stack:** Python 3.11+, Decimal, FastAPI, pytest; Next.js/React/TypeScript. PostgreSQL-tester använder separat `rai_test` och ska inte köras mot en delad produktionsdatabas.
+
+**Spec:** §§9.7–9.8 i denna fil. Stegen nedan är plan, inte färdig funktion.
+
+## Global Constraints
+
+- `REGISTRY` är källan till vilka nyckeltal som stöds; inga parallella hårdkodade UI-listor.
+- Alla differenser räknas med `Decimal`, aldrig JavaScript-flyttal eller LLM-aritmetik.
+- Saknad månad är `INSUFFICIENT_DATA`, inte noll; noll nämnare är `NOT_APPLICABLE`.
+- Läsbehörighet, löneradsmaskering och tenantgräns gäller även nya evidenssvar.
+- Inga automatiska kundutskick; AI-text kräver konsultens granskning.
+- `#PSALDO` ger aldrig verifikations- eller motpartsbevis. SIE-fritext ger aldrig verifierat styckpris, volym, leverantörsidentitet eller affärsorsak.
+- Deterministiska fynd fungerar när både OpenAI och Claude saknas. Högst ett modellutkast per utvalt fynd och versionsfingeravtryck; en andra modell kräver separat evalbeslut.
+- Modellen får inga fria SQL-, webb-, skriv- eller externa åtgärdsverktyg. Löneinformation är aggregerad, PTL utelämnad, och servern verkställer gränser per bolag, roll, period och budget.
+- Bevara befintliga `/overview`, `/explain` och rapportanrop tills deras klienter migrerats.
+
+## Review Focus
+
+1. R12 eller YTD som saknar en enda månad får inte jämföras med ett delvis nollfyllt år (Task 1).
+2. Soliditet med ändrad bolagsskattesats måste särredovisa regelbidrag, inte skylla det på verifikationer (Task 2).
+3. `#PSALDO` utan verifikationer måste ge ärlig kontoevidens och aldrig fabricerade verifikationsrader (Task 3).
+4. Konsult utan lönebehörighet måste kunna se rätt totalsumma utan att få lönetransaktionernas detaljer (Task 4).
+5. Nästan lika fritextnamn får inte tyst slås ihop till samma motpart och möjliga dubbletter får inte kallas bevisade (Task 6).
+6. A3 får inte läcka ett annat bolags data eller skriva obelagd affärsorsak trots ett korrekt `fact_id` (Task 8).
+7. En ny import efter AI-utkast måste märka utkastet inaktuellt och stoppa export av gammal analys som aktuell (Task 9).
+8. Syntetiska tester får inte ensamma påstå att fyndkvaliteten är validerad; en blindad pilot måste jämföras med befintligt flöde (Task 10).
+
+### Task 1: Validerade periodpar och status
+
+**Files:** Create `services/api/src/redovisningai/accounting/comparisons.py`; modify `accounting/metrics.py`, `review/analysis.py`; test `services/api/tests/test_accounting.py` och ny `services/api/tests/test_metric_explanations.py`.
+
+**Interfaces:** `comparison_pair(current: Period, mode: Literal["yoy", "previous"], ledger: Ledger, index: LedgerIndex) -> ComparisonPair`; `ComparisonPair` har `current: Period`, `previous: Period`, `status: FactStatus`, `warnings: tuple[str, ...]`; `metric_facts` använder status innan `change_fact`.
+
+- [ ] Skriv parametriserade fall för månad MoM/YoY, YTD i brutet år, FY med olika längd, R12 och saknad månad. Testa även att ett saknat balansår inte blir noll:
+
+  ```python
+  assert comparison_pair(month(2026, 9), "previous", bygg.ledger, bygg).previous.spec == "2026-08"
+  assert comparison_pair(month(2026, 9), "yoy", bygg.ledger, bygg).previous.spec == "2025-09"
+  missing = calculate_metric("cash", bygg, month(2019, 5))
+  valid = calculate_metric("cash", bygg, month(2026, 9))
+  assert missing.status is FactStatus.INSUFFICIENT_DATA
+  assert change_fact(FactStore(), missing, valid, "föregående") is None
+  ```
+
+- [ ] Kör `cd services/api && pytest tests/test_accounting.py tests/test_metric_explanations.py -q`; förvänta först fel för det nya gränssnittet.
+- [ ] Lägg `ComparisonPair` i nya modulen. Använd `same_period_previous_year`/`previous_period`, kontrollera `kind`, `months_count`, FY-längd och `index.missing_months` för båda perioder. Skilj `PARTIAL` från saknad data. Ändra `change_fact`/`change_pct_fact` så bara `CALCULATED` eller uttryckligen preliminära `PARTIAL`-fakta med värden ger förändring, aldrig `INSUFFICIENT_DATA`, `ERROR` eller `NOT_APPLICABLE`. Låt balansmåtten använda samma datatäckning som resultatmåtten.
+- [ ] Kör de fokuserade testerna gröna; kontrollera även `ruff check src/redovisningai/accounting tests/test_metric_explanations.py`.
+
+### Task 2: Exakt brygga för samtliga nyckeltal
+
+**Files:** Create `services/api/src/redovisningai/accounting/metric_explanations.py`; modify `services/api/src/redovisningai/accounting/metrics.py` endast där råa kvotindata/status behövs; test `services/api/tests/test_metric_explanations.py`.
+
+**Interfaces:** `ratio_effects(n0: Decimal, d0: Decimal, n1: Decimal, d1: Decimal) -> tuple[Decimal, Decimal]`; `explain_metric(code: str, index: LedgerIndex, pair: ComparisonPair, *, mapping: StatementMapping, rates: RateTable, store: FactStore) -> MetricExplanation`; `MetricExplanation.to_dict()` ger `current`, `previous`, `change`, `status`, `components`, `warnings`, `periods`, `versions`.
+
+- [ ] Skriv golden tests som itererar `REGISTRY`. För varje beräkningsbart SEK-tal gäller `sum(Decimal(c.effect) for c in components) == change`; för procenttal gäller samma identitet före avrundning. Testa `operating_margin`, `gross_margin`, `personnel_share`, `equity_ratio`, `quick_ratio` och `current_ratio` separat med exakta indata:
+
+  ```python
+  assert sum(ratio_effects(Decimal("50"), Decimal("100"), Decimal("60"), Decimal("120"))) == Decimal("0")
+  assert sum(ratio_effects(Decimal("40"), Decimal("100"), Decimal("60"), Decimal("120"))) == Decimal("10")
+  ```
+
+- [ ] Kör `cd services/api && pytest tests/test_metric_explanations.py -q`; bekräfta rött test.
+- [ ] Implementera kvotens symmetriska formel från §9.7 med råa `Decimal`-värden. Mappa `net_sales`, `operating_result`, `result_after_financial`, `cash`, `receivables`, `payables` till respektive resultat-/balansrader och kontoaggregation. Mappa sex procenttal till täljare/nämnare; för `gross_margin` är täljaren nettoomsättning + material, för `personnel_share` är den minus personalkostnader, för `equity_ratio` justerat eget kapital inklusive skatteparameter. Dela täljarens bidrag vidare men dubbelräkna inte undernivån. Avvisa noll nämnare; vid teckenbyte visa varning. Bygg presentationsavrundning som separat rad.
+- [ ] Kör testerna gröna och stäm av alla 13 `REGISTRY`-koder; ingen generell `else: return 0` får dölja ett omappat mått.
+
+### Task 3: Evidens från konto till verifikation i båda perioderna
+
+**Files:** Create `services/api/src/redovisningai/accounting/metric_evidence.py`; modify `services/api/src/redovisningai/accounting/metric_explanations.py` och vid behov `services/api/src/redovisningai/accounting/variance.py`; test `services/api/tests/test_metric_explanations.py`.
+
+**Interfaces:** `evidence_for_component(index: LedgerIndex, component: MetricComponent, pair: ComparisonPair, *, limit: int = 8) -> Evidence`; `Evidence` har `accounts`, `current_rows`, `previous_rows`, `other_current`, `other_previous`, `source_level`.
+
+- [ ] Testa samma kontos samtliga effektiva rader i båda perioderna, rättelser/återföringar, top 8 + övriga som summerar till kontot och `psaldo` utan rader:
+
+  ```python
+  pair = comparison_pair(month(2026, 9), "yoy", bygg.ledger, bygg)
+  explanation = explain_metric("net_sales", bygg, pair, mapping=StatementMapping(), rates=default_rates(), store=FactStore())
+  evidence = evidence_for_component(bygg, explanation.components[0], pair, limit=8)
+  assert sum(r.amount for r in evidence.current_rows) + evidence.other_current == evidence.current_total
+  assert sum(r.amount for r in evidence.previous_rows) + evidence.other_previous == evidence.previous_total
+  ```
+
+- [ ] Kör fokuserat test rött.
+- [ ] Använd `Voucher.effective_rows`, `index.vouchers_in(period)`, `source_line` och `Voucher.content_hash()` för verifierbara referenser. För balansmått visa ingående/slutliga saldon och rörelser mellan datum bara om hela kedjan täcks; annars kontosaldon med varning. Beskriv inte fri SIE-text som bevisad leverantör, pris eller affärsorsak. Ingen AI i denna modul.
+- [ ] Kör fokuserade tester gröna samt `test_accounting.py` för regressionsskydd.
+
+### Task 4: Lätt jämförelse-API och behörigt detalj-API
+
+**Files:** Modify `services/api/src/redovisningai/review/analysis.py`, `services/api/src/redovisningai/api/routes_company.py`, `services/api/src/redovisningai/api/deps.py` vid behov; test `services/api/tests/test_api.py`.
+
+**Interfaces:** `GET /api/companies/{company_id}/metric-comparisons?period=2026-09&mode=yoy`; `GET /api/companies/{company_id}/metric-explanations/{code}?period=2026-09&mode=yoy`. Lätt svar returnerar alla mått utan verifikationsrader; detaljsvaret returnerar Task 2/3:s struktur.
+
+- [ ] Lägg API-test för 13 mått, ogiltigt mått/periodpar (`422`), annat bolag (`404`) och lönebegränsad roll:
+
+  ```python
+  response = cl.get(f"/api/companies/{cid}/metric-comparisons?period=2026-09&mode=yoy", headers=H("kalle@api.se"))
+  assert response.status_code == 200
+  assert set(response.json()["metrics"]) == set(REGISTRY)
+  detail = cl.get(f"/api/companies/{cid}/metric-explanations/operating_result?period=2026-09&mode=yoy", headers=H("kalle@api.se"))
+  assert detail.status_code == 200
+  assert all(
+      row.get("account") not in range(7000, 7700)
+      for component in detail.json()["components"]
+      for row in component["evidence"]["current_rows"] + component["evidence"]["previous_rows"]
+  )
+  ```
+
+- [ ] Kör bara dessa API-tester mot **isolerad** `rai_test`; kontrollera databasadress innan fixture som skapar om den databasen körs.
+- [ ] Återanvänd `load_analysis(principal, company_id)` och `_mask_payroll`. Lägg bolag/period/versionskontroll före detaljhämtning, högst begränsat top-N, och behåll befintliga endpoints oförändrade. Testa att maskering inte ändrar totalerna.
+- [ ] Kör API-tester, `ruff check` och `mypy` för de ändrade Python-modulerna.
+
+### Task 5: Klickbar arbetsyta för jämförelse och förklaring
+
+**Files:** Modify `apps/web/lib/api.ts`, `apps/web/components/client/OverviewTab.tsx`, `apps/web/components/client/shared.tsx` bara om periodval behöver delas med rapportfliken; skapa `apps/web/components/client/MetricExplanation.tsx`.
+
+**Interfaces:** TypeScript-typer för Task 4:s lätta/detaljerade svar; jämförelseläge `yoy | previous`; varje nyckeltalskort öppnar `MetricExplanation` med konton och båda periodernas verifikationer.
+
+- [ ] Rita och bygg först statiska tillstånd för ett fullständigt och ett ofullständigt svar. Visa periodväljare, status, procentenheter, top-N + övriga samt källnivå `verifikationer saknas`; varje verifikationsrad använder befintlig `VoucherLink`.
+- [ ] Koppla `useLoad` till lätta svaret och hämta detaljsvar först vid klick. Bevara nuvarande översikt och resultatbrygga under migreringen. Undvik `Number()` för beräkningar av differenser; visa färdiga strängar från API. Exakt anropsform:
+
+  ```tsx
+  const [mode, setMode] = useState<"yoy" | "previous">("yoy");
+  const summary = useLoad<MetricComparisons>(`${base}/metric-comparisons?period=${encodeURIComponent(spec)}&mode=${mode}`);
+  const detail = useLoad<MetricExplanation>(selectedCode
+    ? `${base}/metric-explanations/${selectedCode}?period=${encodeURIComponent(spec)}&mode=${mode}`
+    : null);
+  ```
+- [ ] Kör `cd apps/web && npm run typecheck && npm run build`; gör manuell tangentbords- och smalskärmskontroll av periodval, öppning/stängning och fel-/laddningstillstånd.
+
+### Task 6: Deterministiska transaktionskandidater och prioritering
+
+**Files:** Create `services/api/src/redovisningai/analytics/finding_candidates.py` and `services/api/src/redovisningai/review/finding_priorities.py`; modify `services/api/src/redovisningai/analytics/spend.py`, `services/api/src/redovisningai/review/analysis.py`; test new `services/api/tests/test_finding_candidates.py` and existing `services/api/tests/test_metric_explanations.py`.
+
+**Interfaces:** `collect_candidates(index: LedgerIndex, pair: ComparisonPair, explanations: list[MetricExplanation], *, mapping_version: str) -> list[FindingCandidate]`; `rank_findings(candidates: list[FindingCandidate], *, limit: int = 5) -> RankedFindings`. Kandidat bär `code`, `period_pair`, `amount_effect`, `fact_ids`, källreferenser, `source_level`, `warnings`, `group_key` och versioner. Resultatet har `top`, `others` och maskinläsbara nedrankningsskäl.
+
+- [ ] Skriv golden tests för stor kontoändring, ny/upphörd/varaktigt ändrad återkommande kostnad, ändrad verifikationsfrekvens, rättelse/återföring, möjlig dubblett och kombinerad marginalpress. Negativa fall: säsong, engångspost, saknad månad, snarlika fritextnamn och `#PSALDO` utan verifikationer. Pris/volym får ingen kandidat utan strukturerade rad-, enhets- och avstämningsdata. Pinna `Decimal`-belopp och källreferenser i båda perioder.
+- [ ] Kör `cd services/api && pytest tests/test_finding_candidates.py -q` först rött. Kontrollera att eventuell databasfixture riktas endast mot isolerad `rai_test`.
+- [ ] Bygg på befintliga `spend_report`, `detect_recurrence` och `detect_level_shift`, inte en parallell kostnadsmotor. Använd bolagets egen verifierade historik; robust säsongs-/rullande jämförelse bara med dokumenterad minsta täckning. Fritextgruppering är ett osäkert förslag och möjlig dubblett en granskningsfråga. Varje kandidat ska bära spårbara fakta och versioner, inte bara modelltext.
+- [ ] Pinna stabil sortering: väsentlighet, nyhet/uthållighet, täckning, evidens och åtgärdbar kontroll; poängdelar och tröskelversion syns. Gruppera flera nyckeltal från samma konton/verifikationer till ett fynd med samtliga `fact_id`, utan kausal etikett. Visa högst fem som standard, behåll alla bortsorterade kandidater och skäl. Testa att stor ofullständig ändring inte blir säker slutsats.
+- [ ] Kör kandidat-, spend- och redovisningstester gröna samt `ruff check` på ändrade moduler. Utan AI ska de prioriterade fynden fortfarande vara läsbara.
+
+### Task 7: Behörigt fynd-API och deterministisk översikt
+
+**Files:** Modify `services/api/src/redovisningai/api/routes_company.py`, `services/api/src/redovisningai/review/analysis.py`, `apps/web/lib/api.ts`, `apps/web/components/client/OverviewTab.tsx`; test `services/api/tests/test_api.py`.
+
+**Interfaces:** `GET /api/companies/{company_id}/findings?period=...&mode=yoy|previous` returnerar Task 6:s `top` och `others` utan råa verifikationsrader. Detaljvy återanvänder Task 4:s bolags-, period- och lönebehörighet. Översikten visar fynden även när ingen modell är konfigurerad.
+
+- [ ] Lägg API-test för exakt fem toppfynd som max, fullständig `others` med rankningsskäl, annat bolag/byrå (`404`), löneradsmaskering, ofullständig period och ingen kandidat. Kör `pytest tests/test_api.py -q` först rött och sedan grönt mot kontrollerad isolerad `rai_test`.
+- [ ] Visa evidensnivå, berörda nyckeltal, osäkerhet och klickväg till konto/verifikation i båda perioderna. AI-status är sekundär; datalucka och `#PSALDO` får tydliga tillstånd. Kör `cd apps/web && npm run typecheck && npm run build` och manuell tangentbords-/smalskärmskontroll.
+
+### Task 8: Avgränsad A3-utredning och proaktiv körning
+
+**Files:** Modify `services/api/src/redovisningai/ai/tasks.py`, `ai/tools.py`, `ai/verifier.py`, `ai/service.py`, `services/api/src/redovisningai/jobs/pipeline.py`, `services/api/src/redovisningai/review/analysis.py`; test `services/api/tests/test_ai.py`, `services/api/tests/test_workflow.py`.
+
+**Interfaces:** A3 tar ett versionsbundet `FindingCandidate`-paket med tillåtna `fact_id`, perioder och begränsningar och får endast utvalda kundbundna A5-läsverktyg. Strukturerat utkast skiljer `observation`, `accounting_explanation`, `possible_business_cause`, `suggested_check`, `fact_ids`, `limitations` och `source_level`. Resultatet lagras per bolag, import-/mappningsfingeravtryck, periodpar, fyndregelversion, uppgift, prompt och modellversion.
+
+- [ ] Testa att okänt `fact_id`, egen siffra, fel period/version, pris-/volympåstående utan strukturerad fakturarad och obelagd affärsorsak avvisas eller nedgraderas till tydligt märkt hypotes. Korrekt bokföringsbrygga är **inte** bevis för affärskausalitet. Pinna modellbortfall/failover: deterministisk Task 7-vy fungerar ändå.
+- [ ] Säkerhetstesta promptinjektion i verifikationstext, annat bolag/byrå, roll utan lönebehörighet, PTL, för stora verktygssvar samt stopp för antal anrop, rader, tokens, tid och kostnad. Använd syntetiska testdata; skicka inga verkliga kunduppgifter till extern modell från testsuiten. Kör `pytest tests/test_ai.py tests/test_workflow.py -q` först rött och sedan grönt; verifiera isolerad `rai_test` före DB-fixture.
+- [ ] Återanvänd befintliga A5-läsverktyg med serverside begränsning för bolag, behörighet, period och budget. Ingen fri SQL, webb, skrivning eller kundkontakt. SIE-text är opålitlig data; lön skickas aggregerat och PTL utelämnas. Servern verifierar svarsstruktur, fakta, numeriska strängar, evidensnivå och version. Ogiltigt svar visas inte som färdig analys.
+- [ ] Kör AI som begränsat, idempotent steg **efter** lyckad granskning och utanför dess databastransaktion, högst ett utkast per utvalt fynd/fingeravtryck. Modellfel får inte stoppa import/granskning. Logga anrop, rader, tokens, tid och kostnad utan råa personuppgifter. Behåll en modell med befintlig provider-failover; en andra modell blir bara ett separat evalbeslut.
+
+### Task 9: Samma periodpar i kommentarer/rapporter och versionsgiltighet
+
+**Files:** Modify `services/api/src/redovisningai/api/routes_review.py`, `services/api/src/redovisningai/api/routes_other.py`, `services/api/src/redovisningai/reports/builders.py`, `services/api/src/redovisningai/jobs/pipeline.py` vid behov och `apps/web/components/client/ReportsTab.tsx`; test `services/api/tests/test_api.py`, `services/api/tests/test_workflow.py`.
+
+**Interfaces:** Skapande av kommentar och rapport tar ett explicit validerat `compare`-spec eller dokumenterad standard; sparat AI-utkast innehåller periodparet, alla käll-/regelversioner och konsultens beslut per slutsats. Export redovisar samma par och stoppar aktuellt anspråk från inaktuellt utkast. Endast godkänd kundsäker text får ingå.
+
+- [ ] Testa att ett valt MoM-par syns i intern kommentar och nedladdad rapport, att standard fortfarande är YoY, samt att ny import, ändrad mappning, periodpar eller beräknings-/promptversion markerar tidigare fynd och AI-utkast inaktuella. Testa beslut `approve`/`reject`/`correct` med motivering per slutsats och att kundrapport bara tar aktuell godkänd kundsäker text.
+- [ ] Pinna version och periodpar i ett fokuserat API-fall:
+
+  ```python
+  draft = cl.post(f"/api/companies/{cid}/periods/2026-09/commentary?compare=2026-08", headers=H("kalle@api.se"))
+  assert draft.status_code == 200
+  assert draft.json()["compare_period"] == "2026-08"
+  assert draft.json()["source_fingerprint"]
+  ```
+- [ ] Kör fokuserade workflow-/API-tester röda mot isolerad testdatabas.
+- [ ] För vidare `compare` genom rapport- och kommentarvägarna, lagra periodpar + stabilt import-/mappningsfingeravtryck och regel-/promptversion i befintlig JSON-metadata för utkast, och jämför mot aktuell data före export. Ändra inte redan godkänd rapport i tysthet; visa att den är baserad på äldre data och kräv ny granskning för ett aktuellt dokument. Lägg `godkänn`/`avvisa`/`korrigera` med motivering per prioriterad slutsats i befintligt granskningsflöde. Visa fakta, bokföringsförklaring och hypotes åtskilda i `ReportsTab.tsx`; ingen extern handling sker automatiskt.
+- [ ] Kör fokuserade tester och webbens typecheck/build; klicktesta fynd → båda periodernas underlag → konsultbeslut → rapport. Dokumentera vad som inte kunde köras. Ingen commit/push utan uttrycklig begäran.
+
+### Task 10: Låst eval och lanseringsgrind
+
+**Files:** Modify `services/api/src/redovisningai/ai/evals.py`; create `services/api/tests/test_finding_evals.py`; uppdatera denna plan endast med faktiskt uppmätta pilotresultat när en pilot genomförts.
+
+- [ ] Lås syntetiska golden/eval-fall för säsong, engångskostnad, nivåskifte, rättelse/återföring, dubblettförslag, osäker motpart, saknad månad, `#PSALDO`, lön/PTL och promptinjektion. Pinna noll aritmetikfel, noll okända faktahänvisningar, noll accepterade obelagda affärsorsaker samt budgetstopp. Kör `cd services/api && pytest tests/test_metric_explanations.py tests/test_finding_candidates.py tests/test_finding_evals.py tests/test_ai.py -q`.
+- [ ] Före extern pilot: verifiera avtal, region, personuppgiftsflöde och konsultens tillstånd. Detta är en separat releasegrind, inte något som testsviten automatiskt godkänner. Lås representativa avslutade kundmånader och facit före tröskeljustering; låt konsulter blindat bedöma nya topp fem mot nuvarande arbetsflöde på samma månader.
+- [ ] Redovisa precision@5, falsklarm per kundmånad, täckning av väsentliga fynd, korrekta `fact_id`, tid till granskningsbeslut och AI-kostnad per kundmånad med urvalsstorlek och avvisningsorsaker. Syntetiskt grönt är inte kvalitetsbevis för drift. Behåll den tolkningsbara baslinjen om piloten inte visar nettovinst; aktivera varken svartlådemodell eller rutinmässig två-modellgranskning utan separat jämförande eval.
+- [ ] Slutgrind: kör full relevant Python-svit, `ruff check`, `mypy`, webbens typecheck/build samt manuell tenant-/löne-/PTL-kontroll. Rapportera explicit vad som passerade, misslyckades eller inte kördes. Ingen commit/push utan uttrycklig begäran.
+
+**Genomförandegrind:** först när denna reviderade plan har granskats och accepterats börjar Task 1. Varje task ska lämna körbara tester och en separat verifierad leverans; ingen modellleverantör får vara ett krav för att den deterministiska analysen ska fungera.
+
+## Implementationsstatus (2026-09-26)
+
+- **Byråflöde och avgränsning:** produkten har byrå-/kundseparering med RLS, roller, granskningskö, periodstängning, klickbar konto-/verifikationsevidens, rapportgodkännande och export. AI är ett valfritt analyslager ovanpå den deterministiska bokföringsmotorn; ingen AI-funktion krävs för import, beräkning eller fyndvisning. Bokföringsmässig effekt och möjlig affärsorsak visas åtskilda, konsulten fattar beslut och kundutskick/bokföringsskrivning sker inte automatiskt.
+- **Task 1–5:** validerade periodpar, exakta nyckeltalsbryggor, evidens och jämförelsegränssnitt är implementerade. API-/behörighetsfallen testades mot separat PostgreSQL-container och endast `rai_test`; manuell tangentbords- och smalskärmskontroll återstår.
+- **Task 6–7:** deterministisk top-5 och nedrankningsskäl, konto-/transaktionsfynd, API och UI finns. Bekräftade alias kräver 12 kompletta voucher-månader för återkommande kostnad och frekvens; nivåskifte kräver 24. Dubblett är bara en kontrollsignal, inte en slutsats. Task 6 är **delvis klar**: golden-täckning för rättelser/återföringar, kombinerad marginalpress och fynd utan bekräftad alias återstår.
+- **Task 8:** A3 tar nu högst fem deterministiskt prioriterade transaktionskandidater tillsammans med period- och nyckeltalsbryggor. Utgående payload är en uttrycklig allowlist: aggregerade värden, konto-/faktreferenser, evidensnivå och räkningar; bolags-/motpartsnamn, fritext, verifikationsreferenser, lönekonton och PTL-data filtreras bort. Råa AI-paket/svar sparas inte i AI-spåret. Modellutfall verifieras fortfarande mot lokalt faktalager. End-to-end-paketgräns och A3-reservflöde har syntetiska/API-regressionstester. Ingen extern AI-leverantör anropades i verifieringen.
+- **Task 9:** jämförelseperiod, källfingeravtryck, inaktualitetskontroll, konsultbeslut och rapportfilter finns och DB/API-sviten passerar. Manuell kontroll av fynd → båda periodernas underlag → beslut → rapport återstår.
+- **Task 10 / pilotgrind:** syntetiska fynd-evaler och verifieringsskydd finns. Extern pilot med avslutade månader, blindad konsultbedömning, precision@5, falsklarm, tidsvinst och AI-kostnad återstår. Före drift måste byrån själv godkänna aktuella leverantörsvillkor, region, personuppgiftsflöde, informationsplikt och kund-/uppdragsvillkor. Det följer inte av utvecklarens godkännande i denna uppgift.
+- **Verifiering 2026-09-26:** full API-/DB-/Python-svit mot isolerad `rai_test`: **176 passerade, 2 hoppade över**; de två kräver en separat PgBouncer-service. Ruff och full mypy (25 källfiler) passerar. Webbens typecheck och Next.js produktionsbygge passerar. Syntetisk offline-eval med fake-provider passerar. Manuell browser-/tenant-/löne-/PTL-granskning och pilot med verklig kunddata återstår. Ingen extern modell användes i detta verifieringspass.

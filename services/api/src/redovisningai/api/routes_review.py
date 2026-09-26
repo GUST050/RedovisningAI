@@ -4,15 +4,21 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
-from typing import Any
+from hashlib import sha256
+from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from redovisningai.accounting.comparisons import validate_comparison
+from redovisningai.accounting.metric_explanations import explain_metric
+from redovisningai.accounting.metrics import REGISTRY
 from redovisningai.ai.providers.base import ToolBudget
+from redovisningai.ai.tasks import A3_PROMPT_VERSION, A4_PROMPT_VERSION, period_commentary_input
 from redovisningai.ai.tools import analyst_tools
+from redovisningai.analytics.finding_candidates import collect_candidates
 from redovisningai.api.deps import (
     Principal,
     db,
@@ -25,8 +31,10 @@ from redovisningai.api.deps import (
 from redovisningai.db import models as m
 from redovisningai.db import repo
 from redovisningai.db.session import TenantContext, tenant_session
+from redovisningai.facts.model import CALC_VERSION, FactStatus, Unit, Visibility
 from redovisningai.findings.lifecycle import FindingStatus
 from redovisningai.jobs.pipeline import review_company
+from redovisningai.review.finding_priorities import rank_findings
 from redovisningai.review.workflow import (
     WorkflowError,
     approve_period,
@@ -41,6 +49,78 @@ def _ai(principal: Principal):  # type: ignore[no-untyped-def]
     from redovisningai.ai.factory import build_ai_service
 
     return build_ai_service(principal.org_id)
+
+
+def _a3_findings(analysis: Any, review: Any, current: Any, previous: Any) -> list[dict[str, Any]]:
+    """Build the bounded, data-minimal transaction candidates for A3."""
+    pair = validate_comparison(current, previous, analysis.index)
+    explanations = [
+        explain_metric(
+            code,
+            analysis.index,
+            pair,
+            mapping=analysis.ctx.statement_mapping,
+            rates=analysis.rates,
+            store=review.store,
+        )
+        for code in REGISTRY
+    ]
+    candidates = collect_candidates(
+        analysis.index,
+        pair,
+        explanations,
+        mapping_version=analysis.ctx.statement_mapping.version,
+        aliases=analysis.ctx.aliases,
+    )
+    selected = rank_findings(candidates, limit=5).top
+    output: list[dict[str, Any]] = []
+    for candidate in selected:
+        accounts: set[int] = set()
+        evidence_count = 0
+        for source in candidate.sources:
+            for account in str(source.get("accounts", "")).split(","):
+                try:
+                    account_number = int(account)
+                except ValueError:
+                    continue
+                if not (7000 <= account_number <= 7699 or 2710 <= account_number <= 2719):
+                    accounts.add(account_number)
+            references = source.get("references")
+            if isinstance(references, list):
+                evidence_count += len(references)
+        safe_sources = [source for source in candidate.sources]
+        fact = review.store.new(
+            "variance_component",
+            "ai_finding:" + candidate.code + ":" + sha256(candidate.group_key.encode()).hexdigest()[:16],
+            candidate.code,
+            candidate.amount_effect,
+            Unit.SEK if candidate.unit == Unit.SEK.value else Unit.COUNT,
+            period=current.spec,
+            compare_period=previous.spec,
+            status=FactStatus.PARTIAL if candidate.warnings else FactStatus.CALCULATED,
+            visibility=Visibility.INTERNAL,
+            lineage={"accounts": accounts, "source_level": candidate.source_level},
+        )
+        aggregate_source = next(iter(safe_sources), {})
+        output.append(
+            {
+                "code": candidate.code,
+                "period_pair": list(candidate.period_pair),
+                "fact_id": fact.id,
+                "fact_ids": list(candidate.fact_ids),
+                "unit": fact.unit.value,
+                "accounts": sorted(accounts),
+                "metric_codes": list(candidate.metric_codes),
+                "source_level": candidate.source_level,
+                "evidence_count": evidence_count,
+                "recurrence": aggregate_source.get("recurrence"),
+                "current_count": aggregate_source.get("current_count"),
+                "previous_count": aggregate_source.get("previous_count"),
+                "before_monthly_average": aggregate_source.get("before_monthly_average"),
+                "after_monthly_average": aggregate_source.get("after_monthly_average"),
+            }
+        )
+    return output
 
 
 def _finding_dict(r: m.FindingRow) -> dict[str, Any]:
@@ -135,7 +215,7 @@ def cases(
             {
                 "key": c.case_key,
                 "title": c.title,
-                "root_cause": c.root_cause,
+                "root_cause": _rendered(c.root_cause, [fact for f in fs for fact in f.facts]),
                 "suggested_action": c.suggested_action,
                 "ask_client_suggested": c.ask_client_suggested,
                 "severity": c.severity,
@@ -234,11 +314,25 @@ def periods(company_id: uuid.UUID, s: Session = Depends(db)) -> list[dict[str, A
 
 
 @router.get("/periods/{period}")
-def period_detail(company_id: uuid.UUID, period: str, s: Session = Depends(db)) -> dict[str, Any]:
+def period_detail(
+    company_id: uuid.UUID,
+    period: str,
+    principal: Principal = Depends(get_principal),
+    s: Session = Depends(db),
+) -> dict[str, Any]:
     get_company(s, company_id)
     r = s.scalar(select(m.PeriodReview).where(m.PeriodReview.company_id == company_id, m.PeriodReview.period == period))
     if r is None:
         raise HTTPException(404, "Perioden har inte granskats")
+    analysis = load_analysis(principal, company_id)
+    commentary = dict(r.commentary) if r.commentary else None
+    if commentary:
+        metadata = commentary.get("analysis_metadata")
+        commentary["stale"] = not analysis.draft_is_current(metadata, prompt_version=A3_PROMPT_VERSION)
+    client_report = dict(r.client_report) if r.client_report else None
+    if client_report:
+        metadata = client_report.get("analysis_metadata")
+        client_report["stale"] = not analysis.draft_is_current(metadata, prompt_version=A4_PROMPT_VERSION)
     return {
         "period": r.period,
         "status": r.status,
@@ -248,8 +342,8 @@ def period_detail(company_id: uuid.UUID, period: str, s: Session = Depends(db)) 
         "reported_at": r.reported_at.isoformat() if r.reported_at else None,
         "override_note": (r.snapshot or {}).get("override_note"),
         "changes": r.changes,
-        "commentary": r.commentary,
-        "client_report": r.client_report,
+        "commentary": commentary,
+        "client_report": client_report,
     }
 
 
@@ -282,33 +376,87 @@ def _review_result(principal: Principal, company_id: uuid.UUID, period: str):  #
 
 
 @router.post("/periods/{period}/commentary")
-def commentary(company_id: uuid.UUID, period: str, principal: Principal = Depends(require_write)) -> dict[str, Any]:
+def commentary(
+    company_id: uuid.UUID,
+    period: str,
+    compare: str | None = Query(default=None),
+    principal: Principal = Depends(require_write),
+) -> dict[str, Any]:
     a, rev = _review_result(principal, company_id, period)
+    try:
+        package = a.commentary_package(rev, compare_spec=compare)
+    except ValueError as exc:
+        raise HTTPException(422, f"Ogiltig jämförelseperiod: {compare}") from exc
+    current = a.period(package["period"]["spec"])
+    previous = a.period(package["compare"]["spec"])
+    package["findings"] = _a3_findings(a, rev, current, previous)
+    # Candidate facts were added to the shared, period-scoped fact store above;
+    # the provider projection will retain only explicitly referenced IDs.
+    package["facts"] = rev.store.to_list()
+    metadata = {
+        "period": current.spec,
+        "compare_period": previous.spec,
+        "source_fingerprint": a.source_fingerprint(current, previous, prompt_version=A3_PROMPT_VERSION),
+        "mapping_version": a.ctx.statement_mapping.version,
+        "category_version": a.ctx.category_mapping.version,
+        "calculation_version": CALC_VERSION,
+        "prompt_version": A3_PROMPT_VERSION,
+        "task": "A3",
+    }
+    ai_package = period_commentary_input(package)
+    allowed_fact_ids = {str(f["id"]) for f in ai_package["facts"]}
+    allowed_fact_ids.update(str(account) for finding in ai_package["findings"] for account in finding["accounts"])
     out = _ai(principal).run(
         "A3",
-        a.commentary_package(rev),
+        ai_package,
         rev.store,
         org_id=str(principal.org_id),
         company_id=str(company_id),
-        names_to_mask=a.ctx.person_names,
-        allowed_identifiers=a.allowed_identifiers(),
+        # The provider sees only the projected aggregates. Claim verification
+        # is limited to facts included in that exact package.
+        allowed_identifiers=allowed_fact_ids,
     )
+    metadata["provider"] = out.trace.provider
+    metadata["model"] = out.trace.model
+    metadata["region"] = out.trace.region
+    metadata["source"] = out.source
+    result = {**out.to_dict(), "analysis_metadata": metadata, "compare_period": previous.spec}
     with tenant_session(principal.ctx) as s:
         pr = s.scalar(
             select(m.PeriodReview).where(m.PeriodReview.company_id == company_id, m.PeriodReview.period == period)
         )
         if pr is not None:
-            pr.commentary = {**out.to_dict(), "created_at": datetime.now().isoformat(), "by": principal.email}
+            pr.commentary = {**result, "created_at": datetime.now().isoformat(), "by": principal.email}
         repo.audit(
             s, principal.ctx, "ai.commentary", company_id, period=period, source=out.source, trace_id=out.trace.id
         )
-    return out.to_dict()
+    return result
 
 
 @router.post("/periods/{period}/meeting")
-def meeting(company_id: uuid.UUID, period: str, principal: Principal = Depends(require_write)) -> dict[str, Any]:
+def meeting(
+    company_id: uuid.UUID,
+    period: str,
+    compare: str | None = Query(default=None),
+    principal: Principal = Depends(require_write),
+) -> dict[str, Any]:
     a, rev = _review_result(principal, company_id, period)
-    pkg = a.client_package(rev)
+    try:
+        pkg = a.client_package(rev, compare_spec=compare)
+    except ValueError as exc:
+        raise HTTPException(422, f"Ogiltig jämförelseperiod: {compare}") from exc
+    current = a.period(pkg["period"]["spec"])
+    previous = a.period(pkg["compare"]["spec"])
+    metadata = {
+        "period": current.spec,
+        "compare_period": previous.spec,
+        "source_fingerprint": a.source_fingerprint(current, previous, prompt_version=A4_PROMPT_VERSION),
+        "mapping_version": a.ctx.statement_mapping.version,
+        "category_version": a.ctx.category_mapping.version,
+        "calculation_version": CALC_VERSION,
+        "prompt_version": A4_PROMPT_VERSION,
+        "task": "A4",
+    }
     out = _ai(principal).run(
         "A4",
         pkg,
@@ -318,24 +466,76 @@ def meeting(company_id: uuid.UUID, period: str, principal: Principal = Depends(r
         names_to_mask=a.ctx.person_names,
         allowed_identifiers=a.allowed_identifiers(),
     )
+    metadata["provider"] = out.trace.provider
+    metadata["model"] = out.trace.model
+    metadata["region"] = out.trace.region
+    metadata["source"] = out.source
+    result = {**out.to_dict(), "analysis_metadata": metadata, "compare_period": previous.spec}
     with tenant_session(principal.ctx) as s:
         pr = s.scalar(
             select(m.PeriodReview).where(m.PeriodReview.company_id == company_id, m.PeriodReview.period == period)
         )
         if pr is not None:
             pr.client_report = {
-                **out.to_dict(),
+                **result,
                 "created_at": datetime.now().isoformat(),
                 "by": principal.email,
                 "approved": False,
             }
         repo.audit(s, principal.ctx, "ai.meeting", company_id, period=period, source=out.source, trace_id=out.trace.id)
-    return out.to_dict()
+    return result
+
+
+class ClaimDecisionIn(BaseModel):
+    index: int = Field(ge=0)
+    statement: str = Field(min_length=3, max_length=2000)
+    decision: Literal["approve", "reject", "correct"]
+    reason: str = Field(min_length=3, max_length=2000)
+    corrected_text: str | None = Field(default=None, min_length=3, max_length=2000)
+
+
+def _apply_claim_decisions(
+    statements: list[str], decisions: list[ClaimDecisionIn]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    expected = set(range(len(statements)))
+    indices = [decision.index for decision in decisions]
+    if set(indices) != expected or len(indices) != len(expected):
+        raise ValueError("Du måste fatta ett beslut med motivering för varje slutsats.")
+    accepted = []
+    audit: list[dict[str, Any]] = []
+    for decision in sorted(decisions, key=lambda item: item.index):
+        statement = statements[decision.index].strip()
+        if statement != decision.statement.strip():
+            raise ValueError("En slutsats har ändrats efter granskning; granska den igen.")
+        if decision.decision == "correct" and not (decision.corrected_text or "").strip():
+            raise ValueError("Ett korrigerat beslut måste innehålla den korrigerade texten.")
+        accepted_text = (decision.corrected_text or "").strip() if decision.decision == "correct" else statement
+        if decision.decision != "reject":
+            accepted.append(
+                {
+                    "type": "OBSERVATION",
+                    "text": accepted_text,
+                    "rendered": accepted_text,
+                    "fact_ids": [],
+                    "edited": True,
+                }
+            )
+        audit.append(
+            {
+                "index": decision.index,
+                "statement": statement,
+                "decision": decision.decision,
+                "reason": decision.reason.strip(),
+                "corrected_text": accepted_text if decision.decision == "correct" else None,
+            }
+        )
+    return accepted, audit
 
 
 class MeetingEditIn(BaseModel):
     summary: list[str] = Field(default_factory=list)
     questions: list[str] = Field(default_factory=list)
+    decisions: list[ClaimDecisionIn] = Field(default_factory=list)
     approve: bool = False
 
 
@@ -357,10 +557,23 @@ def edit_meeting(
     if body.approve and not principal.can_approve_reports and principal.role != "ADMIN":
         raise HTTPException(403, "Kräver behörigheten att godkänna kundrapporter")
     data = dict(pr.client_report or {})
+    if body.approve:
+        analysis = load_analysis(principal, company_id)
+        if not analysis.draft_is_current(data.get("analysis_metadata"), prompt_version=A4_PROMPT_VERSION):
+            raise HTTPException(
+                409, "Mötesunderlaget är inaktuellt. Skapa ett nytt utkast från aktuell data före godkännande."
+            )
     content = dict(data.get("data") or {})
-    content["summary"] = [
-        {"type": "OBSERVATION", "text": t, "rendered": t, "fact_ids": [], "edited": True} for t in body.summary
-    ]
+    if body.approve:
+        try:
+            content["summary"], data["claim_decisions"] = _apply_claim_decisions(body.summary, body.decisions)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+    else:
+        data.pop("claim_decisions", None)
+        content["summary"] = [
+            {"type": "OBSERVATION", "text": t, "rendered": t, "fact_ids": [], "edited": True} for t in body.summary
+        ]
     content["questions"] = [
         {"type": "QUESTION", "text": t, "rendered": t, "fact_ids": [], "edited": True} for t in body.questions
     ]
@@ -471,7 +684,7 @@ def attachment(
     key: str,
     principal: Principal = Depends(get_principal),
     s: Session = Depends(db),
-):  # type: ignore[no-untyped-def]
+) -> Any:
     from fastapi.responses import Response
 
     from redovisningai.jobs.pipeline import _org_store

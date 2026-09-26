@@ -28,6 +28,128 @@ Regler som alltid gäller:
 - Skriv på saklig, kort svenska utan rubriker, länkar, bilder eller markdown.
 - Anklaga aldrig kunden för fusk eller brott. Beskriv vad som bör kontrolleras."""
 
+# Bump these whenever the corresponding prompt/schema semantics change. The value
+# is persisted with generated drafts and participates in their staleness checks.
+A3_PROMPT_VERSION = "A3-v2"
+A4_PROMPT_VERSION = "A4-v1"
+A3_FINDING_LABELS = {
+    "recurring_cost_change": "förändring i återkommande kostnad",
+    "transaction_frequency_change": "ändrad verifikationsfrekvens",
+    "recurring_level_shift": "möjligt bestående kostnadsskifte",
+    "possible_duplicate": "möjlig strukturell dubblett",
+    "account_change": "större förändring på konto",
+}
+
+
+def period_commentary_input(package: dict[str, Any]) -> dict[str, Any]:
+    """Project an internal analysis into the approved, data-minimal A3 payload.
+
+    No company/counterparty names, voucher text or identifiers, case titles,
+    detailed fact labels, payroll rows, or AML/PTL data may cross the provider
+    boundary. Only aggregate period/KPI/bridge facts and their opaque IDs do.
+    """
+    metrics: dict[str, Any] = {}
+    fact_ids: set[str] = set()
+    for code, metric in package.get("metrics", {}).items():
+        projected = {key: metric[key] for key in ("id", "change_id", "change_pct_id") if metric.get(key)}
+        if projected:
+            metrics[code] = projected
+            fact_ids.update(str(value) for value in projected.values())
+
+    components = []
+    for component in package.get("bridge", {}).get("components", []):
+        fact_id = component.get("fact_id")
+        if not fact_id:
+            continue
+        fact_ids.add(str(fact_id))
+        components.append(
+            {
+                "code": str(component.get("code", "")),
+                # Category labels can be customer-configured free text; use
+                # stable codes in the provider payload instead.
+                "label": str(component.get("code", "")),
+                "effect": component.get("effect"),
+                "fact_id": str(fact_id),
+                "source_level": "aggregated_account_bridge",
+            }
+        )
+
+    findings = []
+    for finding in package.get("findings", []):
+        fact_id = finding.get("fact_id")
+        if fact_id:
+            fact_ids.add(str(fact_id))
+        finding_fact_ids = [str(value) for value in finding.get("fact_ids", [])]
+        fact_ids.update(finding_fact_ids)
+        findings.append(
+            {
+                "code": str(finding.get("code", "")),
+                "label": A3_FINDING_LABELS.get(str(finding.get("code", "")), "prioriterat transaktionsfynd"),
+                "period_pair": finding.get("period_pair"),
+                "amount_fact_id": str(fact_id) if fact_id else None,
+                "fact_ids": finding_fact_ids,
+                "unit": finding.get("unit"),
+                "accounts": [
+                    int(a)
+                    for a in finding.get("accounts", [])
+                    if isinstance(a, int) and not (7000 <= a <= 7699 or 2710 <= a <= 2719)
+                ],
+                "metric_codes": list(finding.get("metric_codes", [])),
+                "source_level": finding.get("source_level"),
+                "evidence_count": int(finding.get("evidence_count", 0)),
+                "recurrence": finding.get("recurrence"),
+                "current_count": finding.get("current_count"),
+                "previous_count": finding.get("previous_count"),
+                "before_monthly_average": finding.get("before_monthly_average"),
+                "after_monthly_average": finding.get("after_monthly_average"),
+            }
+        )
+
+    facts = []
+    for fact in package.get("facts", []):
+        if str(fact.get("id")) not in fact_ids:
+            continue
+        projected_fact = {
+            "id": str(fact["id"]),
+            "value": fact.get("value"),
+            "unit": fact.get("unit"),
+            "status": fact.get("status"),
+            "period": fact.get("period"),
+        }
+        lineage = fact.get("lineage")
+        if isinstance(lineage, dict) and isinstance(lineage.get("accounts"), list):
+            # Payroll accounts and all their amounts are excluded from the
+            # external summary, even when a bridge contains a personnel line.
+            accounts = sorted(
+                {
+                    int(account)
+                    for account in lineage["accounts"]
+                    if isinstance(account, int) and not (7000 <= account <= 7699 or 2710 <= account <= 2719)
+                }
+            )
+            if accounts:
+                projected_fact["accounts"] = accounts
+        facts.append(projected_fact)
+
+    maturity = package.get("maturity", {})
+    open_cases = package.get("open_cases", {})
+    return {
+        "period": package.get("period"),
+        "compare": package.get("compare"),
+        "comparison_status": package.get("comparison_status"),
+        "comparison_warnings": package.get("comparison_warnings", []),
+        "metrics": metrics,
+        "bridge": {"components": components},
+        "findings": findings,
+        "maturity": {
+            "low_periodization": bool(maturity.get("low_periodization", False)),
+            "recommended_view": maturity.get("recommended_view"),
+        },
+        # Counts only. Never send case names or finding descriptions.
+        "open_cases": {"high": int(open_cases.get("high", 0))},
+        "facts": facts,
+    }
+
 
 def claims_schema(max_items: int = 12) -> dict[str, Any]:
     return {"type": "array", "items": CLAIM_SCHEMA, "maxItems": max_items}
@@ -278,8 +400,11 @@ class PeriodCommentary(AITask):
         + """
 
 Uppgift: skriv konsultens interna månadskommentar (4–8 påståenden) utifrån analyspaketet:
-nyckeltal, resultatbrygga, största förändringar, periodmognad och öppna ärenden. Börja med hur
-det går, sedan vad som förändrats och varför (bara med stöd i bryggans komponenter), sedan vad
+nyckeltal, resultatbrygga, prioriterade transaktionsmönster, periodmognad och antal öppna ärenden. Börja med hur
+det går, sedan vad som förändrats och vilka konton/transaktionsmönster som bör undersökas; beskriv bara
+bokföringsmässiga effekter som stöds av bryggor och faktreferenser. Affärsorsak är alltid en hypotes,
+aldrig en slutsats från konto eller belopp ensamt. Hänvisa inte till motpart eller enskild verifikation,
+eftersom analyspaketet saknar sådana identifierare. Sedan vad
 konsulten bör kontrollera. Ta hänsyn till periodmognaden – är perioden preliminär eller
 periodiseras kostnader bara vid bokslut ska du säga det.""",
         schema={
@@ -319,6 +444,20 @@ periodiseras kostnader bara vid bokslut ska du säga det.""",
                     "type": "EXPLANATION",
                     "text": f"{c['label']} påverkade resultatet med {{f:{c['fact_id']}}}.",
                     "fact_ids": [c["fact_id"]],
+                }
+            )
+        for finding in package.get("findings", [])[:2]:
+            accounts = ", ".join(str(a) for a in finding.get("accounts", []))
+            account_text = f" för konto {accounts}" if accounts else ""
+            fact_id = finding.get("amount_fact_id")
+            fact_ids = list(finding.get("fact_ids", []))
+            if fact_id:
+                fact_ids.append(fact_id)
+            claims.append(
+                {
+                    "type": "QUESTION",
+                    "text": f"Granska {finding['label']}{account_text} ({'{f:' + fact_id + '}' if fact_id else 'belopp saknas'}); underlaget visar inte affärsorsaken.",
+                    "fact_ids": fact_ids,
                 }
             )
         for note in package.get("maturity", {}).get("notes", [])[:1]:

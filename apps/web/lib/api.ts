@@ -93,6 +93,107 @@ export type Fact = {
 
 export type MetricEntry = { id: string; fact: Fact; previous?: Fact; change?: Fact; change_pct?: Fact };
 
+export type MetricComparison = {
+  code: string;
+  label: string;
+  unit: string;
+  current: string | null;
+  previous: string | null;
+  change: string | null;
+  status: string;
+  warnings: string[];
+  fact_ids: string[];
+};
+
+export type MetricComparisons = {
+  periods: { current: string; previous: string };
+  status: string;
+  warnings: string[];
+  metrics: Record<string, MetricComparison>;
+};
+
+export type MetricEvidenceRow = {
+  period: string;
+  account: number;
+  amount: string;
+  voucher: string | null;
+  date: string | null;
+  text: string;
+  source_line: number | null;
+  content_hash: string | null;
+  source: string;
+  row_status: string | null;
+};
+
+export type MetricEvidence = {
+  accounts: { account: number; name: string; current: string; previous: string }[];
+  current_rows: MetricEvidenceRow[];
+  previous_rows: MetricEvidenceRow[];
+  current_total: string;
+  previous_total: string;
+  other_current: string;
+  other_previous: string;
+  source_level: string;
+  warnings: string[];
+};
+
+export type MetricExplanation = MetricComparison & {
+  components: {
+    code: string;
+    label: string;
+    current: string;
+    previous: string;
+    effect: string;
+    unit: string;
+    source_level: string;
+    current_accounts: { account: number; amount: string }[];
+    previous_accounts: { account: number; amount: string }[];
+    fact_id: string | null;
+    note: string | null;
+    evidence: MetricEvidence;
+  }[];
+  periods: { current: string; previous: string };
+  versions: Record<string, string>;
+};
+
+export type AnalysisFinding = {
+  code: string;
+  label: string;
+  metric_codes: string[];
+  period_pair: [string, string];
+  amount_effect: string;
+  unit: string;
+  fact_ids: string[];
+  sources: {
+    accounts: string;
+    fact_id?: string;
+    source_level: string;
+    references?: {
+      period: string;
+      voucher: string | null;
+      date: string | null;
+      source_line: number | null;
+      content_hash: string | null;
+    }[];
+  }[];
+  source_level: string;
+  warnings: string[];
+  group_key: string;
+  versions: Record<string, string>;
+  priority_score: number;
+  score_parts: Record<string, number>;
+  demotion_reasons: string[];
+};
+
+export type AnalysisFindings = {
+  periods: { current: string; previous: string };
+  status: string;
+  warnings: string[];
+  top: AnalysisFinding[];
+  others: AnalysisFinding[];
+  count: number;
+};
+
 export type Overview = {
   company: { id: string; name: string; org_number: string | null };
   period: { spec: string; label: string };

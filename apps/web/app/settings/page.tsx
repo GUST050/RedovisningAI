@@ -27,12 +27,16 @@ type Suppression = { id: string; rule_code: string; reason: string; company_id: 
 type AuditRow = { at: string; user: string | null; company_id: string | null; action: string; details: Record<string, unknown> };
 type AiStatus = {
   enabled: boolean;
+  requested: boolean;
   platform: string;
-  region: string;
+  region: string | null;
   secondary: string | null;
   models: Record<string, string>;
   tokens_used_this_month: number;
   monthly_budget: number | null;
+  test_mode: boolean;
+  test_max_output_tokens: number | null;
+  test_max_tool_calls: number | null;
   notice: string;
 };
 type Proposal = { target: string; code: string; change: string; value: string | null; valid_from: string | null; valid_to: string | null; source_url: string; rationale: string };
@@ -329,9 +333,11 @@ function AiView() {
     <Card title="AI-tjänst">
       <dl className="grid max-w-xl grid-cols-2 gap-y-1 text-[13px]">
         <dt className="text-muted">Status</dt>
-        <dd>{d.enabled ? "Aktiverad" : "Avstängd – regelbaserade texter används"}</dd>
+        <dd>{d.enabled ? "Aktiverad" : d.requested ? "Kan inte starta – kontrollera AI-nyckel och serverkonfiguration" : "Avstängd – regelbaserade texter används"}</dd>
         <dt className="text-muted">Plattform</dt>
-        <dd>{d.platform} ({d.region}){d.secondary && ` · reserv: ${d.secondary}`}</dd>
+        <dd>{d.platform}{d.region && ` (${d.region})`}{d.secondary && ` · reserv: ${d.secondary}`}</dd>
+        <dt className="text-muted">Läge</dt>
+        <dd>{d.test_mode ? "Test – reservleverantör avstängd" : "Full drift"}</dd>
         {Object.entries(d.models).map(([k, v]) => (
           <div key={k} className="contents">
             <dt className="text-muted">Modell ({k === "strong" ? "analys" : k === "medium" ? "texter" : "klassning"})</dt>
@@ -343,9 +349,13 @@ function AiView() {
           {d.tokens_used_this_month.toLocaleString("sv-SE")} tokens
           {used !== null && ` (${used} % av budget)`}
         </dd>
+        {d.test_mode && <>
+          <dt className="text-muted">Testgränser</dt>
+          <dd>{d.monthly_budget?.toLocaleString("sv-SE") ?? "–"} tokens/månad · {d.test_max_output_tokens?.toLocaleString("sv-SE")} utdata-tokens/anrop · {d.test_max_tool_calls} verktygsanrop</dd>
+        </>}
       </dl>
       <p className="mt-3 flex items-center gap-2 text-[12px] text-muted"><AiBadge /> {d.notice}</p>
-      <p className="mt-1 text-[12px] text-muted">Personnamn maskeras innan anrop. Data används inte för att träna modeller och behandlas inom vald region.</p>
+      <p className="mt-1 text-[12px] text-muted">Personnamn maskeras innan anrop. Kontrollera respektive leverantörs datavillkor och projektets regioninställning före användning med riktiga kunduppgifter. Tokenbudgeten är inte ett exakt kostnadstak; sätt även en utgiftsgräns hos leverantören.</p>
     </Card>
   );
 }

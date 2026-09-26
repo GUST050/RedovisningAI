@@ -148,11 +148,17 @@ class AIService:
         budget: BudgetTracker | None = None,
         trace_sink: Callable[[AITrace], None] | None = None,
         keep_payloads: bool = True,
+        max_output_tokens: int | None = None,
+        max_tool_calls: int | None = None,
+        max_attempts: int = 2,
     ) -> None:
         self.provider = provider
         self.budget = budget or InMemoryBudget()
         self.trace_sink = trace_sink
         self.keep_payloads = keep_payloads
+        self.max_output_tokens = max_output_tokens
+        self.max_tool_calls = max_tool_calls
+        self.max_attempts = max_attempts
 
     @property
     def enabled(self) -> bool:
@@ -203,7 +209,7 @@ class AIService:
             trace.error = "AI-budgeten för månaden är förbrukad"
         else:
             feedback = ""
-            for attempt in range(2):
+            for attempt in range(self.max_attempts):
                 trace.attempts = attempt + 1
                 user = (
                     content
@@ -223,8 +229,17 @@ class AIService:
                             user_content=user,
                             tools=tools or [],
                             schema=task.spec.schema,
-                            budget=tool_budget or ToolBudget(),
-                            max_tokens=task.spec.max_tokens,
+                            budget=ToolBudget(
+                                max_tool_calls=min((tool_budget or ToolBudget()).max_tool_calls, self.max_tool_calls)
+                                if self.max_tool_calls is not None
+                                else (tool_budget or ToolBudget()).max_tool_calls,
+                                max_iterations=min((tool_budget or ToolBudget()).max_iterations, self.max_tool_calls)
+                                if self.max_tool_calls is not None
+                                else (tool_budget or ToolBudget()).max_iterations,
+                            ),
+                            max_tokens=min(task.spec.max_tokens, self.max_output_tokens)
+                            if self.max_output_tokens is not None
+                            else task.spec.max_tokens,
                         )
                     else:
                         res = self.provider.structured(
@@ -233,7 +248,9 @@ class AIService:
                             system=task.spec.system,
                             user_content=user,
                             schema=task.spec.schema,
-                            max_tokens=task.spec.max_tokens,
+                            max_tokens=min(task.spec.max_tokens, self.max_output_tokens)
+                            if self.max_output_tokens is not None
+                            else task.spec.max_tokens,
                         )
                 except ProviderError as exc:
                     trace.error = f"{type(exc).__name__}: {exc}"
@@ -241,15 +258,24 @@ class AIService:
                     break
                 usage.add(res.usage)
                 trace.provider, trace.model, trace.region = res.provider, res.model, res.region
-                trace.tool_calls.extend(res.tool_calls)
+                if self.keep_payloads:
+                    trace.tool_calls.extend(res.tool_calls)
+                else:
+                    # Keep an audit count/name without storing tool arguments,
+                    # which can contain account, voucher or period details.
+                    trace.tool_calls.extend({"tool": call.get("tool", "unknown")} for call in res.tool_calls)
                 # Granska på pseudonymiserad text (återställda personnummer skulle annars se ut som
                 # siffror), återställ sedan namn och uppgifter för visning.
                 cleaned, verification = task.verify(res.data, package, store, allowed)
                 cleaned = _unmask(cleaned, pseudo)
                 trace.downgraded += verification.downgraded
-                if verification.ok or attempt == 1:
+                if verification.ok or attempt == self.max_attempts - 1:
                     trace.rejected = [
-                        {"text": r.claim.get("text", ""), "reason": r.reason} for r in verification.rejected
+                        {
+                            "text": r.claim.get("text", "") if self.keep_payloads else "",
+                            "reason": r.reason if self.keep_payloads else "påstående underkändes av verifieraren",
+                        }
+                        for r in verification.rejected
                     ]
                     result_data = cleaned
                     break
@@ -282,7 +308,7 @@ class FakeProvider:
         store_for_fallback: FactStore | None = None,
     ) -> None:
         self.name = "fake"
-        self.region = "local"
+        self.region: str | None = "local"
         self.responses = responses or {}
         self.calls: list[dict[str, Any]] = []
         self.store = store_for_fallback or FactStore()

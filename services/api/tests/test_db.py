@@ -170,6 +170,7 @@ def test_import_versioning_and_duplicate(world) -> None:  # type: ignore[no-unty
     g = generate(DEMO_PROFILES[0], date(2026, 10, 12))  # nyare export: fler verifikationer
     raw = write_sie4(g.ledger, g.ledger.current)
     res = import_sie(world["admin_a"], world["bygg"], "bygg-2026-okt.se", raw, run_review=False)
+    assert res.stats["vouchers"] == len(g.ledger.current.vouchers)
     assert res.stats["added"] > 0 and res.stats["unchanged"] > 0 and res.stats["removed"] == 0
     again = import_sie(world["admin_a"], world["bygg"], "kopia.se", raw, run_review=False)
     assert again.skipped_duplicate

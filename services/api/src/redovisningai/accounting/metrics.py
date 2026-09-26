@@ -300,7 +300,10 @@ def calculate_metric(
     definition = REGISTRY[code]
     ctx = MetricContext(index, period, mapping or StatementMapping(), rates or default_rates(), low_maturity)
     try:
-        res = definition.compute(ctx)
+        if not index.has_data(period):
+            res = MetricResult(None, FactStatus.INSUFFICIENT_DATA, {}, note="Perioden saknar fullständig datatäckning.")
+        else:
+            res = definition.compute(ctx)
     except Exception as exc:  # beräkningsfel ska synas, inte krascha analysen
         res = MetricResult(None, FactStatus.ERROR, {}, note=str(exc))
     store = store or FactStore()
@@ -327,7 +330,13 @@ def calculate_metric(
 
 def change_fact(store: FactStore, current: Fact, previous: Fact, compare_label: str) -> Fact | None:
     """Förändring mellan två fakta (kr eller procentenheter)."""
-    if current.value is None or previous.value is None:
+    eligible = (FactStatus.CALCULATED, FactStatus.PARTIAL)
+    if (
+        current.value is None
+        or previous.value is None
+        or current.status not in eligible
+        or previous.status not in eligible
+    ):
         return None
     unit = Unit.PP if current.unit is Unit.PERCENT else current.unit
     diff = current.value - previous.value
@@ -344,7 +353,15 @@ def change_fact(store: FactStore, current: Fact, previous: Fact, compare_label: 
 
 
 def change_pct_fact(store: FactStore, current: Fact, previous: Fact) -> Fact | None:
-    if current.value is None or previous.value is None or previous.value == 0 or current.unit is not Unit.SEK:
+    eligible = (FactStatus.CALCULATED, FactStatus.PARTIAL)
+    if (
+        current.value is None
+        or previous.value is None
+        or current.status not in eligible
+        or previous.status not in eligible
+        or previous.value == 0
+        or current.unit is not Unit.SEK
+    ):
         return None
     pct = _q((current.value - previous.value) / abs(previous.value) * 100)
     return store.new(

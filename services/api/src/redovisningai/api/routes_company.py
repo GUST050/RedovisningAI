@@ -9,15 +9,20 @@ import uuid
 import zipfile
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import RedirectResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from redovisningai.accounting.comparisons import comparison_pair
+from redovisningai.accounting.metric_evidence import evidence_for_component
+from redovisningai.accounting.metric_explanations import explain_metric
+from redovisningai.accounting.metrics import REGISTRY
 from redovisningai.accounting.periods import same_period_previous_year
 from redovisningai.analytics.budget import budget_vs_actual
+from redovisningai.analytics.finding_candidates import FindingCandidate, collect_candidates
 from redovisningai.analytics.spend import spend_report
 from redovisningai.analytics.tax_account import parse_tax_account_csv, reconcile_tax_account
 from redovisningai.api.deps import (
@@ -33,8 +38,10 @@ from redovisningai.config import get_settings
 from redovisningai.connectors.fortnox import FortnoxApp
 from redovisningai.db import models as m
 from redovisningai.db import repo
+from redovisningai.facts.model import FactStore
 from redovisningai.jobs.pipeline import ImportError_, import_sie
 from redovisningai.review.analysis import PAYROLL, CompanyAnalysis, voucher_view
+from redovisningai.review.finding_priorities import rank_findings
 from redovisningai.sie.parser import parse_sie
 
 router = APIRouter(prefix="/api/companies/{company_id}", tags=["kund"])
@@ -51,12 +58,7 @@ def _mask_payroll(obj: Any, principal: Principal) -> Any:
     if principal.can_payroll:
         return obj
     if isinstance(obj, dict):
-        if (
-            "account" in obj
-            and isinstance(obj.get("account"), int)
-            and obj["account"] in PAYROLL
-            and ("voucher" in obj or "text" in obj)
-        ):
+        if "account" in obj and isinstance(obj.get("account"), int) and obj["account"] in PAYROLL:
             return None
         out = {}
         for k, v in obj.items():
@@ -142,7 +144,7 @@ async def bulk_upload(
     companies = {
         "".join(ch for ch in (c.org_number or "") if ch.isdigit()): c.id for c in s.scalars(select(m.Company)).all()
     }
-    results = []
+    results: list[dict[str, Any]] = []
     for info in zf.infolist():
         if info.is_dir() or info.file_size > 200 * 1024 * 1024:
             continue
@@ -158,8 +160,8 @@ async def bulk_upload(
                 {
                     "file": info.filename,
                     "status": "no_match",
-                    "org_number": doc.org_number,
-                    "company_name": doc.company_name,
+                    "org_number": doc.org_number or "",
+                    "company_name": doc.company_name or "",
                 }
             )
             continue
@@ -274,10 +276,156 @@ def _period(analysis: CompanyAnalysis, spec: str | None):  # type: ignore[no-unt
 
 @router.get("/overview")
 def overview(
-    company_id: uuid.UUID, period: str | None = None, principal: Principal = Depends(get_principal)
+    company_id: uuid.UUID,
+    period: str | None = None,
+    compare: str | None = None,
+    principal: Principal = Depends(get_principal),
 ) -> dict[str, Any]:
     a = load_analysis(principal, company_id)
-    return a.overview(_period(a, period))
+    return a.overview(_period(a, period), _period(a, compare) if compare else None)
+
+
+@router.get("/metric-comparisons")
+def metric_comparisons(
+    company_id: uuid.UUID,
+    period: str,
+    mode: Literal["yoy", "previous"] = "yoy",
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """Lätt jämförelsesvar för samtliga mått utan verifikationsrader."""
+    analysis = load_analysis(principal, company_id)
+    try:
+        current = _period(analysis, period)
+        pair = comparison_pair(current, mode, analysis.ledger, analysis.index)
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(422, f"Ogiltig jämförelseperiod: {period}") from exc
+    metrics: dict[str, dict[str, Any]] = {}
+    for code in REGISTRY:
+        explanation = explain_metric(
+            code,
+            analysis.index,
+            pair,
+            mapping=analysis.ctx.statement_mapping,
+            rates=analysis.rates,
+            store=FactStore(),
+        )
+        item = explanation.to_dict()
+        metrics[code] = {
+            key: item[key]
+            for key in ("code", "label", "unit", "current", "previous", "change", "status", "warnings", "fact_ids")
+        }
+    return {
+        "periods": {"current": pair.current.spec, "previous": pair.previous.spec},
+        "status": pair.status.value,
+        "warnings": list(pair.warnings),
+        "metrics": metrics,
+    }
+
+
+@router.get("/metric-explanations/{code}")
+def metric_explanation(
+    company_id: uuid.UUID,
+    code: str,
+    period: str,
+    mode: Literal["yoy", "previous"] = "yoy",
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """Detaljerat svar för ett mått, med begränsad evidens från båda perioderna."""
+    if code not in REGISTRY:
+        raise HTTPException(422, f"Okänt nyckeltal: {code}")
+    analysis = load_analysis(principal, company_id)
+    try:
+        current = _period(analysis, period)
+        pair = comparison_pair(current, mode, analysis.ledger, analysis.index)
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(422, f"Ogiltig jämförelseperiod: {period}") from exc
+    explanation = explain_metric(
+        code,
+        analysis.index,
+        pair,
+        mapping=analysis.ctx.statement_mapping,
+        rates=analysis.rates,
+        store=FactStore(),
+    )
+    payload = explanation.to_dict()
+    for component_data, component in zip(payload["components"], explanation.components, strict=True):
+        component_data["evidence"] = evidence_for_component(analysis.index, component, pair, limit=8).to_dict()
+    return _mask_payroll(payload, principal)  # type: ignore[no-any-return]
+
+
+def _candidate_dict(candidate: FindingCandidate) -> dict[str, Any]:
+    return {
+        "code": candidate.code,
+        "label": candidate.label,
+        "metric_codes": list(candidate.metric_codes),
+        "period_pair": list(candidate.period_pair),
+        "amount_effect": str(candidate.amount_effect),
+        "unit": candidate.unit,
+        "fact_ids": list(candidate.fact_ids),
+        "sources": list(candidate.sources),
+        "source_level": candidate.source_level,
+        "warnings": list(candidate.warnings),
+        "group_key": candidate.group_key,
+        "versions": candidate.versions,
+        "priority_score": candidate.priority_score,
+        "score_parts": candidate.score_parts,
+        "demotion_reasons": list(candidate.demotion_reasons),
+    }
+
+
+def _has_payroll_accounts(candidate: FindingCandidate) -> bool:
+    for source in candidate.sources:
+        account_list = source.get("accounts")
+        if isinstance(account_list, str) and any(
+            int(account) in PAYROLL for account in account_list.split(",") if account
+        ):
+            return True
+    return False
+
+
+@router.get("/analysis-findings")
+def analysis_findings(
+    company_id: uuid.UUID,
+    period: str,
+    mode: Literal["yoy", "previous"] = "yoy",
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """Deterministiska analyskandidater; skiljda från sparade granskningsfynd."""
+    analysis = load_analysis(principal, company_id)
+    try:
+        current = _period(analysis, period)
+        pair = comparison_pair(current, mode, analysis.ledger, analysis.index)
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(422, f"Ogiltig jämförelseperiod: {period}") from exc
+    explanations = [
+        explain_metric(
+            code,
+            analysis.index,
+            pair,
+            mapping=analysis.ctx.statement_mapping,
+            rates=analysis.rates,
+            store=FactStore(),
+        )
+        for code in REGISTRY
+    ]
+    candidates = collect_candidates(
+        analysis.index,
+        pair,
+        explanations,
+        mapping_version=analysis.ctx.statement_mapping.version,
+        aliases=analysis.ctx.aliases,
+    )
+    if not principal.can_payroll:
+        candidates = [candidate for candidate in candidates if not _has_payroll_accounts(candidate)]
+    ranked = rank_findings(candidates)
+    return {
+        "periods": {"current": pair.current.spec, "previous": pair.previous.spec},
+        "status": pair.status.value,
+        "warnings": list(pair.warnings),
+        "top": [_candidate_dict(candidate) for candidate in ranked.top],
+        "others": [_candidate_dict(candidate) for candidate in ranked.others],
+        "count": len(candidates),
+    }
 
 
 @router.get("/statements")
@@ -347,7 +495,9 @@ def spend(
     principal: Principal = Depends(get_principal),
 ) -> dict[str, Any]:
     a = load_analysis(principal, company_id)
-    p = _period(a, period or (f"YTD:{a.latest_month().end:%Y-%m}" if a.latest_month() else None))
+    latest = a.latest_month()
+    default_period = f"YTD:{latest.end:%Y-%m}" if latest else None
+    p = _period(a, period or default_period)
     c = _period(a, compare) if compare else same_period_previous_year(p, a.ledger)
     return spend_report(a.index, p, c, aliases=a.ctx.aliases).to_dict()
 

@@ -73,6 +73,14 @@ def test_invalid_record_is_reported_with_line() -> None:
     assert issue.line == 3
 
 
+@pytest.mark.parametrize("amount", ["NaN", "sNaN", "Infinity", "-Infinity"])
+def test_non_finite_amount_is_reported_and_not_imported(amount: str) -> None:
+    raw = f"#SIETYP 4\n#RAR 0 20260101 20261231\n#IB 0 1930 {amount}\n"
+    doc = parse_sie(raw)
+    assert (0, 1930) not in doc.opening
+    assert any(issue.code == "INVALID_RECORD" and issue.line == 3 for issue in doc.issues)
+
+
 def test_missing_rar_is_inferred_from_vouchers() -> None:
     raw = '#SIETYP 4\n#VER A 1 20250105 "x"\n{\n#TRANS 1930 {} 1.00\n#TRANS 3001 {} -1.00\n}\n'
     doc = parse_sie(raw.encode())

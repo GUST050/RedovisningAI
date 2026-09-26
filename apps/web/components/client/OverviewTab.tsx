@@ -5,6 +5,7 @@ import { TrendChart } from "@/components/Chart";
 import { Card, ErrorBox, Loading, cx } from "@/components/ui";
 import { type Fact, type MetricEntry, type Overview, useLoad } from "@/lib/api";
 import { monthLabel, pct, sek } from "@/lib/format";
+import { MetricExplanationPanel } from "./MetricExplanation";
 import { Amount, Diff, VoucherLink, useClient } from "./shared";
 
 type Trend = { months: string[]; net_sales: string[]; costs: string[]; operating_result: string[] };
@@ -75,7 +76,7 @@ export function OverviewTab() {
             <dd>{yesNo(m.monthly_vacation_accrual)}</dd>
             <dt className="text-muted">Löner bokförda</dt>
             <dd>{yesNo(m.payroll_booked)}</dd>
-            <dt className="text-muted">Fullständighet</dt>
+            <dt className="text-muted" title="Månadens antal verifikationer jämfört med medianen för de sex föregående månaderna.">Verifikationer mot normalt</dt>
             <dd>{m.completeness ? `${Math.round(Number(m.completeness) * 100)} %` : "–"}</dd>
           </dl>
           {m.notes.length > 0 && (
@@ -87,6 +88,7 @@ export function OverviewTab() {
           )}
         </Card>
       </div>
+      <MetricExplanationPanel key={`metric-analysis-${spec}`} />
       <ExplainCard key={spec} />
     </div>
   );

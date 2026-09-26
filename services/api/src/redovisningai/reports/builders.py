@@ -51,13 +51,13 @@ def client_report(
                 note="Texten är AI-assisterad och granskad av er redovisningskonsult.",
             )
         )
-    ytd = overview["sections"].get("ytd") or overview["sections"]["month"]
+    monthly = overview["sections"]["month"]
     sections.append(
         Section(
-            f"Nyckeltal – {ytd['period']['label']}",
+            f"Nyckeltal – {monthly['period']['label']}",
             table=Table(
-                ["Nyckeltal", "Utfall", f"Jämförelse ({ytd['compare']['label']})", "Förändring"],
-                _metric_rows(ytd),
+                ["Nyckeltal", "Utfall", f"Jämförelse ({monthly['compare']['label']})", "Förändring"],
+                _metric_rows(monthly),
                 numeric_cols={1, 2, 3},
             ),
         )
@@ -97,11 +97,34 @@ def internal_report(
     cases: list[dict[str, Any]],
     commentary: dict[str, Any] | None,
     maturity: dict[str, Any],
+    *,
+    commentary_stale: bool = False,
+    commentary_metadata: dict[str, Any] | None = None,
 ) -> Document:
     company = overview["company"]["name"]
     sections = []
+    if commentary_stale:
+        sections.append(
+            Section(
+                "Inaktuell analys",
+                paragraphs=[
+                    "Den sparade periodkommentaren utelämnades eftersom bokföringsdata, jämförelseperiod eller analysversion har ändrats. Skapa och granska en ny kommentar."
+                ],
+            )
+        )
     if commentary:
-        sections.append(Section("Periodkommentar (intern)", paragraphs=_claims_text(commentary.get("claims", []))))
+        pair_label = ""
+        if commentary_metadata:
+            pair_label = (
+                f"Jämförelse: {commentary_metadata.get('period', '–')} mot "
+                f"{commentary_metadata.get('compare_period', '–')}"
+            )
+        sections.append(
+            Section(
+                "Periodkommentar (intern)",
+                paragraphs=([pair_label] if pair_label else []) + _claims_text(commentary.get("claims", [])),
+            )
+        )
     sections.append(
         Section(
             "Periodmognad",
