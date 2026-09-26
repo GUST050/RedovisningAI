@@ -12,7 +12,9 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 
+from redovisningai.accounting.metrics import REGISTRY
 from redovisningai.accounting.periods import Period, same_period_previous_year
+from redovisningai.ai.metric_change import metric_change_evidence
 from redovisningai.ai.providers.base import ToolSpec
 from redovisningai.analytics.spend import spend_report
 from redovisningai.facts.model import Fact, FactStore, Unit, Visibility
@@ -52,6 +54,15 @@ def analyst_tools(
             }
             for k, v in m.items()
         }
+
+    def explain_metric_change(inp: dict[str, Any]) -> Any:
+        current = per(inp)
+        previous = (
+            analysis.period(inp["compare"])
+            if inp.get("compare")
+            else same_period_previous_year(current, analysis.ledger)
+        )
+        return metric_change_evidence(analysis, inp["metric"], current, previous, store)
 
     def variance_bridge(inp: dict[str, Any]) -> Any:
         p = per(inp)
@@ -188,6 +199,20 @@ def analyst_tools(
             "Nyckeltal för en period jämfört med en annan (standard: samma period i fjol).",
             _schema({"period": PERIOD_PROP, "compare": {"type": "string"}}, ["period", "compare"]),
             compare_periods,
+        ),
+        ToolSpec(
+            "explain_metric_change",
+            "Varför ett nyckeltal ändrats: exakta bidrag per resultatrad eller kvotdel och de största "
+            "kontoförändringarna i båda perioderna, som fakta-id. Tom compare = samma period i fjol.",
+            _schema(
+                {
+                    "metric": {"type": "string", "enum": sorted(REGISTRY)},
+                    "period": PERIOD_PROP,
+                    "compare": {"type": "string", "description": "Jämförelseperiod, eller tom sträng"},
+                },
+                ["metric", "period", "compare"],
+            ),
+            explain_metric_change,
         ),
         ToolSpec(
             "get_variance_bridge",

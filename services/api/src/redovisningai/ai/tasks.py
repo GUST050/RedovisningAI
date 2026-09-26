@@ -569,7 +569,11 @@ class AnalystTask(AITask):
 
 Uppgift: besvara konsultens fråga om kunden. Använd verktygen för att hämta siffror – de returnerar
 fakta med id som du hänvisar till med {f:id}. Hämta bara det som behövs. Svara med 2–8 påståenden.
-Om underlaget inte räcker: säg det och föreslå vad som bör kontrolleras.""",
+Om underlaget inte räcker: säg det och föreslå vad som bör kontrolleras.
+Frågor om varför ett nyckeltal ändrats: börja med explain_metric_change. Beskriv de största bidragen
+som EXPLANATION med bidragets fakta-id (en bokföringsmässig effekt) och gå vid behov vidare till
+get_account_movements för ett enskilt konto. Möjliga affärsorsaker (pris, volym, kund, leverantör)
+är alltid HYPOTHESIS; en brygga bevisar inte varför något hände.""",
         schema={
             "type": "object",
             "properties": {"claims": claims_schema(10)},
