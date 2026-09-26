@@ -37,6 +37,9 @@ class OpenAIConfig:
     models: dict[ModelTier, str] = field(default_factory=lambda: {tier: "gpt-6-luna" for tier in ModelTier})
     timeout_s: float = 90.0
     max_retries: int = 0
+    # Resonemangstokens debiteras som utdata. Enkla uppgifter (liten nivå: A1, A6, A7) klarar låg nivå;
+    # övriga nivåer skickar ingen parameter och får modellens standard. Kräver resonemangsmodeller.
+    reasoning_effort: dict[ModelTier, str] = field(default_factory=lambda: {ModelTier.SMALL: "low"})
 
 
 class OpenAIProvider:
@@ -87,7 +90,7 @@ class OpenAIProvider:
     def _request(
         self, task: str, tier: ModelTier, system: str, schema: dict[str, Any], max_tokens: int
     ) -> dict[str, Any]:
-        return {
+        request: dict[str, Any] = {
             "model": self.config.models[tier],
             "input": [{"role": "system", "content": system}],
             "text": {
@@ -101,6 +104,10 @@ class OpenAIProvider:
             "max_output_tokens": max_tokens,
             "store": False,
         }
+        effort = self.config.reasoning_effort.get(tier)
+        if effort:
+            request["reasoning"] = {"effort": effort}
+        return request
 
     @staticmethod
     def _usage(response: Any) -> Usage:

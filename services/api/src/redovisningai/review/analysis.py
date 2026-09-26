@@ -44,6 +44,7 @@ log = logging.getLogger(__name__)
 
 PAYROLL = AccountSet.of((7000, 7699), (2710, 2719))
 MATURITY_LABELS = {"COMPLETE": "fullständig", "PRELIMINARY": "preliminär", "NO_DATA": "saknar data"}
+CLIENT_FACT_FIELDS = ("id", "label", "display", "status", "period", "compare_period")
 
 
 @dataclass(slots=True)
@@ -441,7 +442,10 @@ class CompanyAnalysis:
         """Paket för kundmötesagenten: bara CLIENT_SAFE-fakta, inga PTL-uppgifter."""
         base = self.commentary_package(review, compare_spec=compare_spec)
         safe_ids = {f.id for f in review.store if f.visibility is Visibility.CLIENT_SAFE}
-        base["facts"] = [f for f in base["facts"] if f["id"] in safe_ids]
+        # Bara det mötestexten behöver: råvärden och härkomst kostar tokens och lockar till egna siffror.
+        base["facts"] = [
+            {k: f[k] for k in CLIENT_FACT_FIELDS if f.get(k) is not None} for f in base["facts"] if f["id"] in safe_ids
+        ]
         base.pop("open_cases", None)
         base["maturity"] = {k: v for k, v in base["maturity"].items() if k != "fact_id"}  # internt faktum
         base["ask_client"] = [

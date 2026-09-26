@@ -683,7 +683,7 @@ class PortfolioBrief(AITask):
     spec = TaskSpec(
         code="A7",
         name="Portföljbrief",
-        tier=ModelTier.MEDIUM,
+        tier=ModelTier.SMALL,  # sammanfattar färdiga poäng och skäl; kräver ingen stark modell
         system=BASE_RULES
         + """
 

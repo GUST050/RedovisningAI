@@ -64,7 +64,8 @@ class VerificationResult:
 
 
 def _allowed_number(token: str, allowed: set[str]) -> bool:
-    t = token.strip().rstrip(".,")
+    # Ta bort avslutande skiljetecken och mellanrum, t.ex. "2026  ." när en {f:id} stod mellan.
+    t = re.sub(r"[\s.,]+$", "", token.strip())
     digits = re.sub(r"[^\d]", "", t)
     if not digits:
         return True

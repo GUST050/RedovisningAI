@@ -84,6 +84,15 @@ def test_refusal_and_incomplete_result_cannot_be_used_as_accounting_text() -> No
         api.structured(task="A3", tier=ModelTier.STRONG, system="", user_content="", schema={})
 
 
+def test_light_tasks_ask_for_low_reasoning_and_other_tasks_keep_the_model_default() -> None:
+    # Resonemangstokens debiteras som utdata; enkla uppgifter (liten nivå) behöver inte medelnivå.
+    api, responses = provider([reply(), reply(), reply()])
+    for tier in (ModelTier.SMALL, ModelTier.MEDIUM, ModelTier.STRONG):
+        api.structured(task="A7", tier=tier, system="", user_content="", schema={})
+    assert responses.calls[0]["reasoning"] == {"effort": "low"}
+    assert "reasoning" not in responses.calls[1] and "reasoning" not in responses.calls[2]
+
+
 def test_cut_off_answer_names_the_reason_and_still_reports_the_billed_usage() -> None:
     # OpenAI debiterar även ett svar som avbröts vid max_output_tokens; budgeten måste se det.
     api, _ = provider([reply(output_text='{"claims": [', status="incomplete", incomplete_reason="max_output_tokens")])

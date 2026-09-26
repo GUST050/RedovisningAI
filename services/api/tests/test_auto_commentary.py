@@ -89,6 +89,32 @@ def test_background_step_adds_case_suggestions_and_the_automatic_analysis(databa
         assert cases and all(c.ai and c.ai["source"] == "ai" for c in cases)
 
 
+def test_background_step_does_not_repeat_a2_for_unchanged_cases(database: str) -> None:
+    admin, company = _company(database, "auto-a2")
+    imported = import_sie(admin, company, "minimal.se", minimal_sie_with_missing_rent())
+    provider, ctx = FakeProvider(), TenantContext.worker(admin.org_id)
+
+    enrich_with_ai(ctx, company, imported.reviewed_periods, AIService(provider))
+    first = sum(1 for call in provider.calls if call["task"] == "A2")
+    enrich_with_ai(ctx, company, imported.reviewed_periods, AIService(provider))
+
+    assert first >= 1
+    assert sum(1 for call in provider.calls if call["task"] == "A2") == first  # samma fynd: inget nytt anrop
+
+
+def test_background_ai_only_covers_the_latest_three_months() -> None:
+    from redovisningai.jobs import pipeline
+    from redovisningai.review.analysis import CompanyAnalysis, CompanyContext
+    from redovisningai.rules.engine import CompanySettings
+    from redovisningai.sie.convert import ledger_from_documents
+    from redovisningai.sie.parser import parse_sie
+
+    ledger = ledger_from_documents([(parse_sie(minimal_sie_with_missing_rent()), "minimal.se")])
+    analysis = CompanyAnalysis(ledger, CompanyContext("o", "c", ledger.company_name, CompanySettings()))
+    specs = ["2026-03", "2026-09", "2026-01", "2026-08", "2026-07"]
+    assert pipeline._recent(analysis, specs) == ["2026-07", "2026-08", "2026-09"]
+
+
 def test_background_step_logs_a_broken_model_and_keeps_going(database: str, caplog: pytest.LogCaptureFixture) -> None:
     admin, company = _company(database, "auto-ko-fel")
     imported = import_sie(admin, company, "minimal.se", minimal_sie_with_missing_rent())

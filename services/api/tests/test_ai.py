@@ -231,6 +231,24 @@ def test_a3_allows_the_account_numbers_its_package_shows(analysis, review) -> No
     assert shown and shown <= a3_allowed_identifiers(projected)
 
 
+def test_a_year_right_before_a_fact_reference_is_not_a_typed_number() -> None:
+    assert find_literal_numbers("Inga personalkostnader för sep 2026 {f:line_personnel_1}.", set()) == []
+
+
+def test_client_meeting_package_sends_only_what_the_text_needs(analysis, review) -> None:  # type: ignore[no-untyped-def]
+    # Råvärden, härkomst (lineage) och interna fält kostar tokens och lockar till egna siffror.
+    facts = analysis.client_package(review)["facts"]
+    assert facts and all(set(f) <= {"id", "label", "display", "status", "period", "compare_period"} for f in facts)
+    assert all(review.store.get(f["id"]) is not None for f in facts)
+
+
+def test_weekly_brief_runs_on_the_light_model_tier() -> None:
+    from redovisningai.ai.providers.base import ModelTier as Tier
+    from redovisningai.ai.tasks import TASKS
+
+    assert TASKS["A7"].spec.tier is Tier.SMALL
+
+
 def test_a_list_of_account_numbers_is_not_one_decimal_number() -> None:
     # "2440, 2611" är en uppräkning av konton; svenska decimaltal skrivs utan mellanslag ("12,5").
     allowed = {"2440", "2611", "2641", "2920"}

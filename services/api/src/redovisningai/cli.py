@@ -26,6 +26,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     from redovisningai.reports.builders import client_report, internal_report, statements_tables
     from redovisningai.reports.document import Table, to_pdf, to_xlsx
     from redovisningai.review.analysis import CompanyAnalysis, CompanyContext
+    from redovisningai.review.commentary import build_commentary
     from redovisningai.rules.engine import CompanySettings
     from redovisningai.sie.convert import ledger_from_documents
     from redovisningai.sie.parser import parse_sie
@@ -48,13 +49,8 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     period = analysis.period(args.period)
     review = analysis.review(period)
     ai = AIService(_provider(args.ai)) if args.ai else AIService(None)
-    commentary = ai.run(
-        "A3",
-        analysis.commentary_package(review),
-        review.store,
-        org_id="local",
-        allowed_identifiers=analysis.allowed_identifiers(),
-    )
+    # Samma data-minimala A3-paket som i appen (inte hela analyspaketet) när --ai används.
+    commentary = build_commentary(analysis, review, ai=ai, org_id="local", company_id="local")
     meeting = ai.run(
         "A4",
         analysis.client_package(review),
@@ -110,7 +106,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     (out / f"{stem} granskning.xlsx").write_bytes(to_xlsx(sheets))
     overview = analysis.overview(period)
     (out / f"{stem} intern.pdf").write_bytes(
-        to_pdf(internal_report(overview, findings, cases, commentary.data, review.maturity.to_dict()))
+        to_pdf(internal_report(overview, findings, cases, commentary["data"], review.maturity.to_dict()))
     )
     (out / f"{stem} kundrapport (utkast).pdf").write_bytes(
         to_pdf(client_report(overview, stmts, meeting.data, args.firm))
@@ -119,7 +115,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     print(f"Periodmognad: {review.maturity.status.value}; {'; '.join(review.maturity.notes) or 'inga anmärkningar'}")
     for c in cases[:10]:
         print(f"  [{c['severity']}] {c['title']}")
-    print(f"Skrev rapporter till {out.resolve()}  (AI: {commentary.source})")
+    print(f"Skrev rapporter till {out.resolve()}  (AI: {commentary['source']})")
     return 0
 
 

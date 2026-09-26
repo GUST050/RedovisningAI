@@ -40,6 +40,7 @@ from redovisningai.storage.objects import EncryptedStore, ObjectStore, get_objec
 log = logging.getLogger(__name__)
 
 AUTO_COMMENTARY_BY = "automatisk analys"
+AI_RECENT_MONTHS = 3  # AI-förslag på ärenden bara för de senaste granskade månaderna
 MAX_FILE_BYTES = 200 * 1024 * 1024
 STEP_VERSION = "1"
 
@@ -226,6 +227,7 @@ def review_company(
         approved = {p for p, r in reviews.items() if r.approved_at is not None}
         change_candidates = _detect_changes_after_approval(s, company, reviews, seqs, now)
         todo = periods or _periods_to_review(analysis, approved, changed_months)
+        recent = set(_recent(analysis, todo))  # AI-förslag (A2) bara för de senaste månaderna
         records = repo.load_findings(s, company_id)
         suppressions = repo.load_suppressions(s, company_id)
         resolutions = repo.load_resolutions(s, company_id)
@@ -251,7 +253,7 @@ def review_company(
                     else "REVIEWED"
                 )
             pr.updated_at = now
-            _save_cases(s, ctx, company_id, result.cases, analysis, result, ai)
+            _save_cases(s, ctx, company_id, result.cases, analysis, result, ai if spec in recent else None)
         # Ändringar i godkända perioder som inte granskas om: spara fynden ändå.
         for c in change_candidates:
             if c.period not in todo:
@@ -374,7 +376,8 @@ def _save_cases(
     ai: AIService | None,
 ) -> None:
     existing = {c.case_key: c for c in s.scalars(select(m.CaseRow).where(m.CaseRow.company_id == company_id)).all()}
-    ai_by_ids = _a2_enrichment(ctx, company_id, analysis, result, ai) if cases else {}
+    needs_ai = bool(cases) and not _a2_is_current(existing, cases)
+    ai_by_ids = _a2_enrichment(ctx, company_id, analysis, result, ai) if needs_ai else {}
     for c in cases:
         row = existing.get(c.key)
         if row is None:
@@ -388,6 +391,21 @@ def _save_cases(
         if enrichment is not None:
             row.ai = enrichment
         row.updated_at = datetime.now()
+
+
+def _recent(analysis: CompanyAnalysis, periods: list[str], limit: int = AI_RECENT_MONTHS) -> list[str]:
+    """De senaste granskade månaderna; äldre ärenden får inga nya AI-förslag vid en import."""
+    return sorted(periods, key=lambda spec: analysis.period(spec).end)[-limit:]
+
+
+def _a2_is_current(rows: dict[str, Any], cases: list[Case]) -> bool:
+    """Har varje ärende redan ett AI-förslag för exakt samma fynd? Då behövs inget nytt A2-anrop."""
+    return bool(cases) and all(
+        (row := rows.get(c.key)) is not None
+        and bool(row.ai)
+        and frozenset(row.ai.get("finding_ids", [])) == frozenset(f.id for f in c.findings)
+        for c in cases
+    )
 
 
 def _a2_enrichment(
@@ -427,14 +445,23 @@ def enrich_with_ai(ctx: TenantContext, company_id: uuid.UUID, periods: list[str]
         ledger, _ = repo.load_ledger(s, company)
         analysis = CompanyAnalysis(ledger, repo.company_context(s, company))
         records = repo.load_findings(s, company_id)
-    for spec in periods:
+    for spec in _recent(analysis, periods):
         try:
             # Samma granskning som sparades (i minnet) ger samma ärenden och fynd-id som i databasen.
             result = analysis.review(analysis.period(spec), records)
             if not result.cases:
                 continue
-            by_ids = _a2_enrichment(ctx, company_id, analysis, result, ai)
             findings = {c.key: frozenset(f.id for f in c.findings) for c in result.cases}
+            with tenant_session(ctx) as s:
+                current = {
+                    r.case_key: r
+                    for r in s.scalars(
+                        select(m.CaseRow).where(m.CaseRow.company_id == company_id, m.CaseRow.case_key.in_(findings))
+                    ).all()
+                }
+                if _a2_is_current(current, result.cases):
+                    continue
+            by_ids = _a2_enrichment(ctx, company_id, analysis, result, ai)
             with tenant_session(ctx) as s:
                 rows = s.scalars(
                     select(m.CaseRow).where(m.CaseRow.company_id == company_id, m.CaseRow.case_key.in_(findings))
