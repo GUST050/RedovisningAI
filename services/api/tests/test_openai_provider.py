@@ -23,12 +23,18 @@ class Responses:
         return self.replies.pop(0)
 
 
-def reply(*, output_text: str = '{"claims": []}', output: list[Any] | None = None, status: str = "completed") -> Any:
+def reply(
+    *,
+    output_text: str = '{"claims": []}',
+    output: list[Any] | None = None,
+    status: str = "completed",
+    incomplete_reason: str | None = None,
+) -> Any:
     return SimpleNamespace(
         output_text=output_text,
         output=output if output is not None else [],
         status=status,
-        incomplete_details=None,
+        incomplete_details=SimpleNamespace(reason=incomplete_reason) if incomplete_reason else None,
         usage=SimpleNamespace(input_tokens=12, output_tokens=5, input_tokens_details=SimpleNamespace(cached_tokens=2)),
         model="gpt-6-luna",
     )
@@ -76,6 +82,38 @@ def test_refusal_and_incomplete_result_cannot_be_used_as_accounting_text() -> No
     api, _ = provider([reply(output_text="{}", status="incomplete")])
     with pytest.raises(ProviderError, match="ofullständigt"):
         api.structured(task="A3", tier=ModelTier.STRONG, system="", user_content="", schema={})
+
+
+def test_cut_off_answer_names_the_reason_and_still_reports_the_billed_usage() -> None:
+    # OpenAI debiterar även ett svar som avbröts vid max_output_tokens; budgeten måste se det.
+    api, _ = provider([reply(output_text='{"claims": [', status="incomplete", incomplete_reason="max_output_tokens")])
+    with pytest.raises(ProviderError, match="max_output_tokens") as caught:
+        api.structured(task="A3", tier=ModelTier.STRONG, system="", user_content="", schema={})
+    assert caught.value.usage.total == 17
+
+
+def test_cut_off_tool_loop_reports_usage_from_every_round() -> None:
+    tool = ToolSpec(
+        "lookup",
+        "Read one voucher",
+        {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+        lambda args: {"voucher": "A1"},
+    )
+    first = reply(
+        output_text="", output=[SimpleNamespace(type="function_call", call_id="c1", name="lookup", arguments="{}")]
+    )
+    api, _ = provider([first, reply(output_text="", status="incomplete", incomplete_reason="max_output_tokens")])
+    with pytest.raises(ProviderError, match="max_output_tokens") as caught:
+        api.run_tools(
+            task="A5",
+            tier=ModelTier.STRONG,
+            system="rules",
+            user_content="question",
+            tools=[tool],
+            schema={"type": "object"},
+            budget=ToolBudget(max_tool_calls=3, max_iterations=3),
+        )
+    assert caught.value.usage.total == 34
 
 
 def test_tool_loop_returns_results_and_enforces_call_limit() -> None:

@@ -23,6 +23,12 @@ class ModelTier(StrEnum):
 class ProviderError(Exception):
     """Fel som inte ska ge failover (t.ex. ogiltig förfrågan)."""
 
+    def __init__(self, message: str = "", *, usage: Usage | None = None) -> None:
+        super().__init__(message)
+        # Ett svar som togs emot men inte gick att använda (t.ex. avbrutet vid tokengränsen)
+        # debiteras ändå av leverantören – budgeten och AI-spåret ska räkna med det.
+        self.usage = usage if usage is not None else Usage()
+
 
 class ProviderUnavailable(ProviderError):
     """Tillfälligt fel (nätverk, 5xx, överbelastning) – försök med nästa leverantör."""

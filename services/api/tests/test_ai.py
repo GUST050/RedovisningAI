@@ -11,13 +11,15 @@ from redovisningai.ai.providers.anthropic_provider import AnthropicConfig, Anthr
 from redovisningai.ai.providers.base import (
     FailoverProvider,
     ModelTier,
+    ProviderError,
     ProviderUnavailable,
     RefusalError,
     ToolBudget,
     ToolSpec,
+    Usage,
 )
 from redovisningai.ai.pseudonymize import Pseudonymizer, luhn_ok
-from redovisningai.ai.service import AIService, FakeProvider
+from redovisningai.ai.service import AIService, FakeProvider, InMemoryBudget
 from redovisningai.ai.tasks import period_commentary_input
 from redovisningai.ai.tools import analyst_tools
 from redovisningai.ai.verifier import find_literal_numbers, verify_claims
@@ -424,6 +426,31 @@ def test_anthropic_refusal_raises() -> None:
     prov, _ = _provider([_resp("refusal", [])])
     with pytest.raises(RefusalError):
         prov.structured(task="A3", tier=ModelTier.STRONG, system="S", user_content="U", schema={})
+
+
+def test_anthropic_cut_off_answer_still_reports_the_billed_usage() -> None:
+    prov, _ = _provider([_resp("max_tokens", [_Block("text", text='{"claims": [')])])
+    with pytest.raises(ProviderError, match="max_tokens") as caught:
+        prov.structured(task="A3", tier=ModelTier.STRONG, system="S", user_content="U", schema={})
+    assert caught.value.usage.total == 18
+
+
+def test_unusable_answer_still_counts_against_budget_and_trace() -> None:
+    class CutOffProvider:
+        name, region = "stub", None
+
+        def structured(self, **_: Any) -> Any:
+            raise ProviderError("avbrutet vid max_tokens", usage=Usage(input_tokens=100, output_tokens=1_500))
+
+    budget = InMemoryBudget()
+    package = {"companies": [{"name": "Bygg & Co AB", "score": 80, "reasons": []}], "allowed": []}
+    out = AIService(CutOffProvider(), budget=budget).run(  # type: ignore[arg-type]
+        "A7", package, FactStore(), org_id="o", allowed_identifiers={"Bygg & Co AB"}
+    )
+    assert out.source == "rules"
+    assert out.trace.error == "ProviderError: avbrutet vid max_tokens"
+    assert (out.trace.usage["input_tokens"], out.trace.usage["output_tokens"]) == (100, 1_500)
+    assert sum(budget.used.values()) == 1_600
 
 
 def test_anthropic_tool_loop_with_budget() -> None:

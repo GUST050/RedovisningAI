@@ -253,6 +253,7 @@ class AIService:
                             else task.spec.max_tokens,
                         )
                 except ProviderError as exc:
+                    usage.add(exc.usage)  # ett avbrutet eller oanvändbart svar debiteras ändå
                     trace.error = f"{type(exc).__name__}: {exc}"
                     log.warning("AI-uppgift %s misslyckades: %s", task_code, exc)
                     break

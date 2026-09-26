@@ -141,26 +141,27 @@ class AnthropicProvider:
             cache_write_tokens=getattr(u, "cache_creation_input_tokens", 0) or 0,
         )
 
+    # Felen nedan bär förbrukningen: ett svar som inte går att använda debiteras ändå.
     @staticmethod
-    def _check_stop(resp: Any) -> None:
+    def _check_stop(resp: Any, usage: Usage) -> None:
         if resp.stop_reason == "refusal":
             details = getattr(resp, "stop_details", None)
             category = getattr(details, "category", None) if details else None
-            raise RefusalError(f"Modellen avböjde (kategori: {category})")
+            raise RefusalError(f"Modellen avböjde (kategori: {category})", usage=usage)
         if resp.stop_reason == "max_tokens":
-            raise ProviderError("Svaret avbröts vid max_tokens")
+            raise ProviderError("Svaret avbröts vid max_tokens", usage=usage)
 
     @staticmethod
-    def _json_text(resp: Any) -> dict[str, Any]:
+    def _json_text(resp: Any, usage: Usage) -> dict[str, Any]:
         text = next((b.text for b in resp.content if getattr(b, "type", None) == "text"), None)
         if text is None:
-            raise ProviderError("Svar utan textblock")
+            raise ProviderError("Svar utan textblock", usage=usage)
         try:
             data = json.loads(text)
         except json.JSONDecodeError as exc:
-            raise ProviderError(f"Ogiltig JSON från modellen: {exc}") from exc
+            raise ProviderError(f"Ogiltig JSON från modellen: {exc}", usage=usage) from exc
         if not isinstance(data, dict):
-            raise ProviderError("JSON-svaret är inte ett objekt")
+            raise ProviderError("JSON-svaret är inte ett objekt", usage=usage)
         return data
 
     # ------------------------------------------------------------------ API
@@ -177,10 +178,11 @@ class AnthropicProvider:
         params = self._request_base(tier, system, schema, max_tokens)
         params["messages"] = [{"role": "user", "content": user_content}]
         resp = self._create(params)
-        self._check_stop(resp)
+        usage = self._usage(resp)
+        self._check_stop(resp, usage)
         return StructuredResult(
-            data=self._json_text(resp),
-            usage=self._usage(resp),
+            data=self._json_text(resp, usage),
+            usage=usage,
             provider=self.name,
             model=getattr(resp, "model", params["model"]),
             region=self.region,
@@ -215,10 +217,10 @@ class AnthropicProvider:
                 req["tool_choice"] = {"type": "none"}
             resp = self._create(req)
             usage.add(self._usage(resp))
-            self._check_stop(resp)
+            self._check_stop(resp, usage)
             if resp.stop_reason != "tool_use":
                 return StructuredResult(
-                    data=self._json_text(resp),
+                    data=self._json_text(resp, usage),
                     usage=usage,
                     provider=self.name,
                     model=getattr(resp, "model", params["model"]),
@@ -258,4 +260,4 @@ class AnthropicProvider:
                     )
             # Alla verktygsresultat i ett och samma användarmeddelande.
             messages.append({"role": "user", "content": results})
-        raise ProviderError("Verktygsloopen avslutades inte")
+        raise ProviderError("Verktygsloopen avslutades inte", usage=usage)

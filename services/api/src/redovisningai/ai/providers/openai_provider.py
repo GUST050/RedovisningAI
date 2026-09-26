@@ -115,24 +115,27 @@ class OpenAIProvider:
         )
 
     @staticmethod
-    def _data(response: Any) -> dict[str, Any]:
+    def _data(response: Any, usage: Usage) -> dict[str, Any]:
+        """Svarets JSON; felen bär förbrukningen eftersom även oanvändbara svar debiteras."""
         if any(
             getattr(part, "type", None) == "refusal"
             for item in (getattr(response, "output", None) or [])
             for part in (getattr(item, "content", None) or [])
         ):
-            raise RefusalError("OpenAI avböjde svaret")
+            raise RefusalError("OpenAI avböjde svaret", usage=usage)
         if getattr(response, "status", None) != "completed":
-            raise ProviderError("OpenAI gav ett ofullständigt svar")
+            reason = getattr(getattr(response, "incomplete_details", None), "reason", None)
+            detail = f" ({reason})" if reason else ""
+            raise ProviderError(f"OpenAI gav ett ofullständigt svar{detail}", usage=usage)
         raw = getattr(response, "output_text", None)
         if not raw:
-            raise ProviderError("OpenAI gav inget textsvar")
+            raise ProviderError("OpenAI gav inget textsvar", usage=usage)
         try:
             data = json.loads(raw)
         except (TypeError, json.JSONDecodeError) as exc:
-            raise ProviderError("OpenAI gav ogiltig JSON") from exc
+            raise ProviderError("OpenAI gav ogiltig JSON", usage=usage) from exc
         if not isinstance(data, dict):
-            raise ProviderError("OpenAI-svaret är inte ett objekt")
+            raise ProviderError("OpenAI-svaret är inte ett objekt", usage=usage)
         return data
 
     def structured(
@@ -148,7 +151,8 @@ class OpenAIProvider:
         req = self._request(task, tier, system, schema, max_tokens)
         req["input"].append({"role": "user", "content": user_content})
         response = self._create(**req)
-        return StructuredResult(self._data(response), self._usage(response), self.name, response.model, self.region)
+        usage = self._usage(response)
+        return StructuredResult(self._data(response, usage), usage, self.name, response.model, self.region)
 
     def run_tools(
         self,
@@ -184,12 +188,14 @@ class OpenAIProvider:
             response = self._create(**request)
             usage.add(self._usage(response))
             if getattr(response, "status", None) != "completed":
-                self._data(response)  # ger tydligt fel även för vägran
+                self._data(response, usage)  # ger tydligt fel även för vägran
             functions = [item for item in response.output if getattr(item, "type", None) == "function_call"]
             if not functions:
-                return StructuredResult(self._data(response), usage, self.name, response.model, self.region, calls)
+                return StructuredResult(
+                    self._data(response, usage), usage, self.name, response.model, self.region, calls
+                )
             if len(calls) >= budget.max_tool_calls or iteration == budget.max_iterations:
-                raise ProviderError("OpenAI nådde verktygsgränsen utan ett slutligt svar")
+                raise ProviderError("OpenAI nådde verktygsgränsen utan ett slutligt svar", usage=usage)
             req["input"].extend(response.output)
             for item in functions:
                 spec = handlers.get(item.name)
@@ -214,4 +220,4 @@ class OpenAIProvider:
                         "output": json.dumps(output, ensure_ascii=False, default=str),
                     }
                 )
-        raise ProviderError("OpenAI nådde verktygsgränsen utan ett slutligt svar")
+        raise ProviderError("OpenAI nådde verktygsgränsen utan ett slutligt svar", usage=usage)
