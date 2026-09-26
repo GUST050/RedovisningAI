@@ -118,6 +118,17 @@ def test_missing_key_or_unknown_provider_fails_closed(monkeypatch) -> None:  # t
     assert build_provider(Settings(ai_enabled=True, ai_platform="mystery")) is None
 
 
+@pytest.mark.parametrize(
+    ("test_mode", "cap", "expected"),
+    [(True, 20_000, 20_000), (True, 0, None), (False, 20_000, None)],
+    ids=["testtak", "inget-testtak", "full-drift"],
+)
+def test_zero_test_cap_leaves_only_the_firm_budget(test_mode: bool, cap: int, expected: int | None) -> None:
+    # 0 = inget separat testtak; byråns månadsbudget (ai_monthly_token_budget) gäller fortfarande.
+    settings = Settings(ai_test_mode=test_mode, ai_test_monthly_token_cap=cap)
+    assert factory.test_budget_cap(settings) == expected
+
+
 def test_test_monthly_cap_is_lower_than_org_budget(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     org_id = uuid.uuid4()
     state = SimpleNamespace(used=19_999)

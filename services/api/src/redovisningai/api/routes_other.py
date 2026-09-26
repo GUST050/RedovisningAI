@@ -466,7 +466,7 @@ def audit_log(company_id: uuid.UUID | None = None, limit: int = 200, s: Session 
 
 @admin.get("/ai/status")
 def ai_status(principal: Principal = Depends(get_principal), s: Session = Depends(db)) -> dict[str, Any]:
-    from redovisningai.ai.factory import build_provider
+    from redovisningai.ai.factory import build_provider, test_budget_cap
     from redovisningai.config import get_settings
 
     st = get_settings()
@@ -478,9 +478,12 @@ def ai_status(principal: Principal = Depends(get_principal), s: Session = Depend
         if st.ai_platform == "openai"
         else {"strong": st.ai_model_strong, "medium": st.ai_model_medium, "small": st.ai_model_small}
     )
+    if st.ai_test_mode and st.ai_test_model:  # visa modellen som faktiskt används i testläget
+        models = {tier: st.ai_test_model for tier in models}
     monthly_budget = org.ai_monthly_token_budget if org else None
-    if st.ai_test_mode and monthly_budget is not None:
-        monthly_budget = min(monthly_budget, st.ai_test_monthly_token_cap)
+    test_cap = test_budget_cap(st)
+    if test_cap is not None and monthly_budget is not None:
+        monthly_budget = min(monthly_budget, test_cap)
     return {
         "enabled": build_provider(st) is not None,
         "requested": st.ai_enabled,

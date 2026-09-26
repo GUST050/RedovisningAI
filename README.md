@@ -135,6 +135,8 @@ byrå och månad (eller byråns lägre budget). Analytikerns verktygsloop kan fo
 flera modellbegäranden. Automatisk reservleverantör är avstängd i testläget.
 Med `RAI_AI_TEST_MODEL` (t.ex. `gpt-6-luna`) körs alla nivåer på en billig modell så länge
 testläget är på; i full drift används de vanliga modellinställningarna igen.
+`RAI_AI_TEST_MONTHLY_TOKEN_CAP=0` tar bort testlägets separata tokentak; byråns egen
+månadsbudget (standard 5 000 000 tokens) gäller alltid.
 Ändra gränserna med `RAI_AI_TEST_*`. För full drift, sätt `RAI_AI_TEST_MODE=false` först efter
 egen utvärdering. Tokenbudgeten mäts efter ett svar och är därför **inte** ett absolut
 kostnadstak vid samtidiga anrop. Sätt också projektets utgiftsgräns hos leverantören.

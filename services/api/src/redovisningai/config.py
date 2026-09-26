@@ -65,7 +65,8 @@ class Settings(BaseSettings):
     ai_test_mode: bool = True
     # Billig modell för alla nivåer medan testläget är på (t.ex. gpt-6-luna); tomt = de vanliga modellerna.
     ai_test_model: str | None = None
-    ai_test_monthly_token_cap: int = Field(default=20_000, ge=1)
+    # 0 = inget separat testtak; byråns månadsbudget (ai_monthly_token_budget) gäller alltid.
+    ai_test_monthly_token_cap: int = Field(default=20_000, ge=0)
     ai_test_max_output_tokens: int = Field(default=1_500, ge=1)
     ai_test_max_tool_calls: int = Field(default=3, ge=0)
 

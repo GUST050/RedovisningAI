@@ -78,6 +78,11 @@ def build_provider(s: Settings | None = None) -> ModelProvider | None:
     return providers[0] if len(providers) == 1 else FailoverProvider(providers)
 
 
+def test_budget_cap(s: Settings) -> int | None:
+    """Testlägets månadstak per byrå; None = inget separat tak (byråns månadsbudget gäller ändå)."""
+    return s.ai_test_monthly_token_cap if s.ai_test_mode and s.ai_test_monthly_token_cap > 0 else None
+
+
 class DbBudget:
     """Tokenbudget per byrå och månad, lagrad i ai_usage."""
 
@@ -141,7 +146,7 @@ def build_ai_service(org_id: uuid.UUID, s: Settings | None = None) -> AIService:
     provider = build_provider(s)
     return AIService(
         provider,
-        budget=DbBudget(org_id, s.ai_test_monthly_token_cap if s.ai_test_mode else None),
+        budget=DbBudget(org_id, test_budget_cap(s)),
         trace_sink=db_trace_sink(org_id),
         # Accounting traces keep hashes, model/usage metadata and decisions,
         # never raw customer payloads or generated drafts. Drafts are stored
