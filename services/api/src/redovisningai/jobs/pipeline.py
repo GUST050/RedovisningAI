@@ -26,12 +26,13 @@ from redovisningai.config import get_settings
 from redovisningai.db import models as m
 from redovisningai.db import repo
 from redovisningai.db.session import TenantContext, tenant_session
+from redovisningai.domain.ledger import FiscalYear
 from redovisningai.facts.model import Visibility
 from redovisningai.findings.lifecycle import reconcile
 from redovisningai.maturity.assess import PeriodStatus
 from redovisningai.review.analysis import CompanyAnalysis
 from redovisningai.rules.engine import FindingCandidate, Severity, default_catalog
-from redovisningai.sie.parser import SieFormatError, parse_sie
+from redovisningai.standard.loader import SourceFormatError, load_source
 from redovisningai.storage.objects import EncryptedStore, ObjectStore, get_object_store
 
 log = logging.getLogger(__name__)
@@ -51,6 +52,8 @@ class ImportResult:
     issues: list[dict[str, Any]]
     stats: dict[str, int]
     reviewed_periods: list[str] = field(default_factory=list)
+    format: str | None = None
+    columns: str | None = None
 
 
 def _normalize_orgnr(s: str | None) -> str:
@@ -65,22 +68,28 @@ def _org_store(session: Session, ctx: TenantContext, store: ObjectStore | None) 
     return base
 
 
-def import_sie(
+UPLOAD_SOURCES = {"CSV": "csv_file", "XLSX": "excel_file", "RAI-JSON": "standard_file"}
+
+
+def import_file(
     ctx: TenantContext,
     company_id: uuid.UUID,
     filename: str,
     raw: bytes,
     *,
-    source: str = "sie_file",
+    source: str | None = None,
     store: ObjectStore | None = None,
     allow_orgnr_mismatch: bool = False,
     run_review: bool = True,
     ai: AIService | None = None,
 ) -> ImportResult:
+    """Importera en källfil i valfritt format (SIE, standardformat, CSV, Excel).
+
+    Filen tolkas till standardmodellen och sparas versionerat. SIE och standardformat ersätter
+    hela räkenskapsår; CSV/Excel ersätter bara verifikationer inom filens datumintervall.
+    """
     if len(raw) > MAX_FILE_BYTES:
         raise ImportError_("Filen är för stor.")
-    if b"\x00" in raw[:4096]:
-        raise ImportError_("Filen ser ut att vara binär – inte en SIE-fil.")
     sha = hashlib.sha256(raw).hexdigest()
     with tenant_session(ctx) as s:
         company = s.get(m.Company, company_id)
@@ -90,25 +99,64 @@ def import_sie(
         if dup is not None:
             repo.audit(s, ctx, "import.duplicate_skipped", company_id, filename=filename, sha256=sha)
             return ImportResult(dup.id, [], True, [], {})
+        known_years = [
+            FiscalYear(f.start_date, f.end_date)
+            for f in s.scalars(select(m.FiscalYearRow).where(m.FiscalYearRow.company_id == company_id)).all()
+        ]
         try:
-            doc = parse_sie(raw)
-        except SieFormatError as exc:
+            loaded = load_source(raw, filename, fiscal_years=known_years)
+        except SourceFormatError as exc:
             repo.audit(s, ctx, "import.failed", company_id, filename=filename, error=str(exc))
             raise ImportError_(str(exc)) from exc
+        ledger = loaded.ledger
         if (
-            doc.org_number
+            ledger.org_number
             and company.org_number
             and not allow_orgnr_mismatch
-            and _normalize_orgnr(doc.org_number) != _normalize_orgnr(company.org_number)
+            and _normalize_orgnr(ledger.org_number) != _normalize_orgnr(company.org_number)
         ):
             raise ImportError_(
-                f"Filens organisationsnummer {doc.org_number} matchar inte bolaget {company.org_number}."
+                f"Filens organisationsnummer {ledger.org_number} matchar inte bolaget {company.org_number}."
             )
+        run_source = source or UPLOAD_SOURCES.get(loaded.format, "sie_file")
+        issues = [
+            {"line": i.line, "code": i.code, "message": i.message, "severity": i.severity.value} for i in loaded.issues
+        ]
+        if loaded.replaces == "date_range":
+            # Varna när ett år tidigare kommit från SIE/Fortnox: detaljer som text och
+            # registreringsdatum skiljer sig ofta mellan exportformat och räknas då som ändringar.
+            earlier_sources: dict[uuid.UUID, set[str]] = {}
+            for r in s.scalars(
+                select(m.ImportRun).where(
+                    m.ImportRun.company_id == company_id,
+                    m.ImportRun.status == "COMPLETE",
+                    m.ImportRun.has_vouchers.is_(True),
+                )
+            ).all():
+                earlier_sources.setdefault(r.fiscal_year_id, set()).add(r.source)
+            fy_by_start = {
+                f.start_date: f.id
+                for f in s.scalars(select(m.FiscalYearRow).where(m.FiscalYearRow.company_id == company_id)).all()
+            }
+            mixed = [
+                y.fiscal_year.label
+                for y in ledger.years
+                if (fid := fy_by_start.get(y.fiscal_year.start)) is not None
+                and earlier_sources.get(fid, set()) - {"csv_file", "excel_file"}
+            ]
+            if mixed:
+                issues.append(
+                    {
+                        "line": None,
+                        "code": "MIXED_SOURCES",
+                        "message": f"Räkenskapsår {', '.join(mixed)} har tidigare importerats från SIE eller Fortnox. "
+                        "Verifikationer i filens månader ersätts; skiljer sig detaljer (text, "
+                        "registreringsdatum) räknas de som ändrade.",
+                        "severity": "warning",
+                    }
+                )
         object_key = f"{ctx.org_id}/{company_id}/source/{sha}"
         _org_store(s, ctx, store).put(object_key, raw)
-        issues = [
-            {"line": i.line, "code": i.code, "message": i.message, "severity": i.severity.value} for i in doc.issues
-        ]
         sf = m.SourceFile(
             org_id=ctx.org_id,
             company_id=company_id,
@@ -116,15 +164,27 @@ def import_sie(
             object_key=object_key,
             sha256=sha,
             size_bytes=len(raw),
-            detected_format=f"SIE{doc.sie_type or ''}",
-            encoding=doc.encoding,
+            detected_format=loaded.format[:20],
+            encoding=loaded.encoding,
             uploaded_by=ctx.user_id,
             parse_issues=issues,
             delete_after=date.today() + timedelta(days=30 * get_settings().source_file_retention_months),
         )
         s.add(sf)
         s.flush()
-        outcome = repo.persist_document(s, ctx, company_id, doc, source=source, source_file_id=sf.id)
+        outcome = repo.persist_ledger(
+            s,
+            ctx,
+            company_id,
+            ledger.accounts.values(),
+            ledger.years,
+            source=run_source,
+            source_file_id=sf.id,
+            parser_version=loaded.parser_version,
+            replaces=loaded.replaces,
+            ranges=loaded.ranges,
+            source_format=loaded.format,
+        )
         for imp_id in outcome.import_ids:
             for step in ("validate_file", "parse_sie", "persist", "materialize"):
                 s.add(
@@ -138,7 +198,7 @@ def import_sie(
                     )
                 )
         if not company.source_system:
-            company.source_system = source
+            company.source_system = run_source
         repo.audit(
             s,
             ctx,
@@ -146,6 +206,7 @@ def import_sie(
             company_id,
             filename=filename,
             sha256=sha,
+            format=loaded.format,
             imports=[str(i) for i in outcome.import_ids],
             added=outcome.added,
             changed=outcome.changed,
@@ -157,12 +218,14 @@ def import_sie(
             False,
             issues,
             {
-                "vouchers": len(doc.vouchers),
+                "vouchers": loaded.voucher_count,
                 "added": outcome.added,
                 "changed": outcome.changed,
                 "removed": outcome.removed,
                 "unchanged": outcome.unchanged,
             },
+            format=loaded.format,
+            columns=loaded.columns,
         )
         affected = sorted(outcome.affected_months)
     if run_review and result.import_ids:
@@ -170,6 +233,32 @@ def import_sie(
             TenantContext.worker(ctx.org_id), company_id, changed_months=affected, ai=ai
         )
     return result
+
+
+def import_sie(
+    ctx: TenantContext,
+    company_id: uuid.UUID,
+    filename: str,
+    raw: bytes,
+    *,
+    source: str = "sie_file",
+    store: ObjectStore | None = None,
+    allow_orgnr_mismatch: bool = False,
+    run_review: bool = True,
+    ai: AIService | None = None,
+) -> ImportResult:
+    """Bakåtkompatibel ingång för SIE-filer (Fortnox-synk, demo, tester)."""
+    return import_file(
+        ctx,
+        company_id,
+        filename,
+        raw,
+        source=source,
+        store=store,
+        allow_orgnr_mismatch=allow_orgnr_mismatch,
+        run_review=run_review,
+        ai=ai,
+    )
 
 
 # ---------------------------------------------------------------------------- granskning

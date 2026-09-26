@@ -171,6 +171,16 @@ class YearData:
     # False när året bara finns som sammandrag (t.ex. årsnr -1 i en SIE4-fil: IB/UB/RES men inga
     # verifikationer). Då kan månadsrörelser bara tas från #PSALDO.
     has_vouchers: bool = True
+    # "known" när ingående balanser finns i källan (SIE #IB, IB-rader) eller är noll för ett nytt
+    # bolag. "missing" när källan inte innehåller dem (t.ex. en verifikationslista i CSV) – då är
+    # balansposter bara kända om föregående års utgående balans går att härleda.
+    opening_status: str = "known"
+    # Månader som verifikationslistan täcker. None = hela räkenskapsåret (SIE-semantik). En
+    # export för del av året anger bara sina månader; övriga månader räknas som saknade, inte noll.
+    covered_months: frozenset[date] | None = None
+
+    def covers(self, month: date) -> bool:
+        return self.covered_months is None or month in self.covered_months
 
 
 @dataclass(slots=True)

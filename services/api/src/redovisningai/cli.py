@@ -1,6 +1,8 @@
 """Kommandorad.
 
-redovisningai analyze FIL.se [FIL2.se ...] --out rapport/    # Fas 0: SIE → Excel + PDF (ingen databas)
+redovisningai analyze FIL.se [FIL2.se ...] --out rapport/    # Fas 0: SIE/CSV/Excel → Excel + PDF (ingen databas)
+redovisningai convert FIL.se [FIL.csv ...] --out bokforing.json  # valfri källa → standardformat (JSON)
+redovisningai compare FIL.se [...] --period 2026-09 --out rapport/  # jämförelserapport med de viktigaste skillnaderna
 redovisningai demo-sie --out demo/                           # skriv demobolagens SIE-filer
 redovisningai migrate                                        # kör databasmigrationer (ägarroll)
 redovisningai create-org "Byrån AB" --admin-email a@b.se --admin-name "Anna"
@@ -27,17 +29,8 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     from redovisningai.reports.document import Table, to_pdf, to_xlsx
     from redovisningai.review.analysis import CompanyAnalysis, CompanyContext
     from redovisningai.rules.engine import CompanySettings
-    from redovisningai.sie.convert import ledger_from_documents
-    from redovisningai.sie.parser import parse_sie
 
-    docs = []
-    for f in args.files:
-        doc = parse_sie(Path(f).read_bytes())
-        for issue in doc.issues:
-            if issue.severity != "info":
-                print(f"  {Path(f).name}:{issue.line or '-'} {issue.code}: {issue.message}", file=sys.stderr)
-        docs.append((doc, Path(f).name))
-    ledger = ledger_from_documents(docs)
+    ledger = _load_files(args.files, getattr(args, "fiscal_year_start", None))
     ctx = CompanyContext(
         "local",
         "local",
@@ -114,6 +107,124 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     for c in cases[:10]:
         print(f"  [{c['severity']}] {c['title']}")
     print(f"Skrev rapporter till {out.resolve()}  (AI: {commentary.source})")
+    return 0
+
+
+def _load_files(files: list[str], fiscal_year_start: int | None = None):  # type: ignore[no-untyped-def]
+    """Läs SIE-, CSV-, Excel- eller standardformatsfiler till en gemensam bokföring och visa avvikelser."""
+    from redovisningai.standard.loader import SourceFormatError, load_ledger
+
+    try:
+        ledger, issues = load_ledger(
+            [(Path(f).read_bytes(), Path(f).name) for f in files], fiscal_year_start_month=fiscal_year_start
+        )
+    except SourceFormatError as exc:
+        raise SystemExit(f"Kunde inte läsa filen: {exc}") from exc
+    for name, issue in issues:
+        if issue.severity != "info":
+            print(f"  {name}:{issue.line or '-'} {issue.code}: {issue.message}", file=sys.stderr)
+    return ledger
+
+
+def cmd_convert(args: argparse.Namespace) -> int:
+    """Valfri källa (SIE, CSV, Excel, standardformat) → RedovisningAI:s standardformat."""
+    from redovisningai.standard.format import dumps
+
+    ledger = _load_files(args.files, args.fiscal_year_start)
+    text = dumps(ledger, source={"program": ledger.program, "files": [Path(f).name for f in args.files]})
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(text, encoding="utf-8")
+    vouchers = sum(len(y.vouchers) for y in ledger.years)
+    years = ", ".join(
+        f"{y.fiscal_year.label}{'' if y.has_vouchers else ' (saldon)'}{' – IB saknas' if y.opening_status == 'missing' else ''}"
+        for y in ledger.years
+    )
+    print(f"{ledger.company_name}: {vouchers} verifikationer, räkenskapsår {years}.")
+    print(f"Skrev {out.resolve()}")
+    return 0
+
+
+def cmd_compare(args: argparse.Namespace) -> int:
+    """Jämförelserapport för två perioder: nyckeltal, viktigaste skillnader och vald utveckling över tid."""
+    from redovisningai.accounting.comparisons import comparison_pair
+    from redovisningai.accounting.metrics import REGISTRY
+    from redovisningai.analytics.differences import collect_differences, fmt_change, fmt_value
+    from redovisningai.reports.comparison_report import (
+        ReportSelectionError,
+        SelectedItem,
+        build_comparison_report,
+    )
+    from redovisningai.reports.document import to_docx, to_pdf, to_xlsx
+    from redovisningai.review.analysis import PAYROLL, CompanyAnalysis, CompanyContext
+
+    ledger = _load_files(args.files, args.fiscal_year_start)
+    analysis = CompanyAnalysis(ledger, CompanyContext("local", "local", ledger.company_name))
+    try:
+        current = analysis.period(args.period)
+        if args.compare:
+            pair = comparison_pair(current, "custom", ledger, analysis.index, analysis.period(args.compare))
+        else:
+            pair = comparison_pair(current, args.mode, ledger, analysis.index)
+    except ValueError as exc:
+        raise SystemExit(f"Ogiltig period: {exc}") from exc
+    client = args.audience == "client"
+    differences = collect_differences(
+        analysis.index,
+        pair,
+        mapping=analysis.ctx.statement_mapping,
+        categories=analysis.ctx.category_mapping,
+        rates=analysis.rates,
+        hidden_accounts=PAYROLL if client else None,
+        include_findings=not client,
+        recommend=args.top,
+    )
+    print(f"{ledger.company_name}: {pair.current.label} jämfört med {pair.previous.label}")
+    for warning in (*pair.warnings, *pair.notices):
+        print(f"  OBS: {warning}")
+    print()
+    for code, explanation in differences.explanations.items():
+        unit = REGISTRY[code].unit.value
+        print(
+            f"  {REGISTRY[code].name:48} {fmt_value(explanation.current, unit):>14} "
+            f"{fmt_value(explanation.previous, unit):>14} {fmt_change(explanation.change, unit):>24}"
+        )
+    selection = (
+        [SelectedItem(item_id.strip()) for item_id in args.items.split(",") if item_id.strip()]
+        if args.items
+        else [SelectedItem(item.id) for item in differences.recommended()]
+    )
+    for spec in args.structure or []:
+        code, _, rest = spec.partition(":")
+        series, _, count = rest.partition(":")
+        selection.append(SelectedItem(f"structure:{code}", None, series or "months", int(count) if count else None))
+    print("\nViktigaste skillnaderna (föreslagna):")
+    for item in differences.recommended():
+        print(f"  [{item.score:3}] {item.summary}")
+    try:
+        document, sheets = build_comparison_report(
+            analysis.index,
+            pair,
+            differences,
+            selection,
+            company_name=ledger.company_name,
+            org_number=ledger.org_number,
+            audience=args.audience,
+            mapping=analysis.ctx.statement_mapping,
+            rates=analysis.rates,
+            firm_name=args.firm,
+            title=args.title,
+        )
+    except ReportSelectionError as exc:
+        raise SystemExit(f"Rapporten kunde inte skapas: {exc}") from exc
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    kind = "kundrapport" if client else "intern"
+    stem = f"{ledger.company_name} {pair.current.spec} jämförelse {kind}".replace("/", "-").replace(":", "_")
+    data = to_pdf(document) if args.format == "pdf" else to_docx(document) if args.format == "docx" else to_xlsx(sheets)
+    path = out / f"{stem}.{args.format}"
+    path.write_bytes(data)
+    print(f"\nSkrev {path.resolve()} ({len(selection)} poster)")
     return 0
 
 
@@ -254,7 +365,39 @@ def main(argv: list[str] | None = None) -> int:
     a.add_argument("--firm", default="Redovisningsbyrån")
     a.add_argument("--ai", choices=["fake", "bedrock", "vertex", "anthropic"])
     a.add_argument("--include-aml", action="store_true", help="Ta med PTL-signaler (bara för PTL-ansvarig)")
+    a.add_argument("--fiscal-year-start", type=int, help="Räkenskapsårets startmånad för CSV/Excel (standard: 1)")
     a.set_defaults(fn=cmd_analyze)
+    cv = sub.add_parser("convert", help="Läs SIE/CSV/Excel/standardformat och skriv standardformatet (JSON)")
+    cv.add_argument("files", nargs="+")
+    cv.add_argument("--out", default="bokforing.json")
+    cv.add_argument("--fiscal-year-start", type=int, help="Räkenskapsårets startmånad för CSV/Excel (standard: 1)")
+    cv.set_defaults(fn=cmd_convert)
+    cp = sub.add_parser("compare", help="Jämför två perioder och skriv en rapport med de viktigaste skillnaderna")
+    cp.add_argument("files", nargs="+")
+    cp.add_argument(
+        "--period", help="t.ex. 2026-09, 2026-Q3, YTD:2026-09, FY:2026-01, R12:2026-09 (standard: senaste månaden)"
+    )
+    cp.add_argument(
+        "--mode",
+        default="yoy",
+        choices=["yoy", "previous"],
+        help="yoy = samma period i fjol, previous = föregående period",
+    )
+    cp.add_argument("--compare", help="Fritt vald jämförelseperiod av samma typ, t.ex. 2026-03")
+    cp.add_argument("--audience", default="internal", choices=["internal", "client"])
+    cp.add_argument("--format", default="pdf", choices=["pdf", "docx", "xlsx"])
+    cp.add_argument("--top", type=int, default=6, help="Antal föreslagna skillnader (standard 6)")
+    cp.add_argument("--items", help="Egna poster i stället för förslagen, t.ex. metric:net_sales,line:income:personnel")
+    cp.add_argument(
+        "--structure",
+        action="append",
+        help="Utveckling över tid, t.ex. operating_margin:months:12 eller equity_ratio:fiscal_years:3 (kan upprepas)",
+    )
+    cp.add_argument("--title")
+    cp.add_argument("--firm", default="Redovisningsbyrån")
+    cp.add_argument("--out", default="rapport")
+    cp.add_argument("--fiscal-year-start", type=int, help="Räkenskapsårets startmånad för CSV/Excel (standard: 1)")
+    cp.set_defaults(fn=cmd_compare)
     d = sub.add_parser("demo-sie", help="Skriv SIE-filer för demobolagen")
     d.add_argument("--out", default="demo-sie")
     d.add_argument("--as-of", default="2026-10-12")

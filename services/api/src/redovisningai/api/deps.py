@@ -16,6 +16,7 @@ from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from redovisningai.accounting.comparisons import ComparisonPair, comparison_pair
 from redovisningai.config import get_settings
 from redovisningai.db import models as m
 from redovisningai.db import repo
@@ -136,6 +137,20 @@ def require_aml(principal: Principal = Depends(get_principal)) -> Principal:
     if not principal.can_aml:
         raise HTTPException(403, "Kräver behörigheten PTL-ansvarig")
     return principal
+
+
+def comparison_for(analysis: CompanyAnalysis, period: str, mode: str, compare: str | None) -> ComparisonPair:
+    """Validerat periodpar för API:t. En fritt vald jämförelseperiod (`compare`) går före `mode`."""
+    try:
+        current = analysis.period(period)
+        if compare:
+            return comparison_pair(current, "custom", analysis.ledger, analysis.index, analysis.period(compare))
+        if mode not in ("yoy", "previous"):
+            raise ValueError(mode)
+        return comparison_pair(current, mode, analysis.ledger, analysis.index)  # type: ignore[arg-type]
+    except (ValueError, KeyError) as exc:
+        detail = str(exc) if compare and "skilja sig" in str(exc) else f"Ogiltig jämförelseperiod: {compare or period}"
+        raise HTTPException(422, detail) from exc
 
 
 def get_company(s: Session, company_id: uuid.UUID) -> m.Company:

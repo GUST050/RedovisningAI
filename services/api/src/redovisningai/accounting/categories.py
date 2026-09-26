@@ -136,10 +136,9 @@ def _s(x: Decimal | None) -> str | None:
 
 def _costs_by_account(index: LedgerIndex, period: Period) -> dict[int, Decimal]:
     out: dict[int, Decimal] = {}
-    for m in period.months():
-        for acc, amt in index.movements.get(m, {}).items():
-            if 4000 <= acc <= 8499 and not (8000 <= acc <= 8399):
-                out[acc] = out.get(acc, ZERO) + amt
+    for acc, amt in index.period_movements(period).items():
+        if 4000 <= acc <= 8499 and not (8000 <= acc <= 8399):
+            out[acc] = out.get(acc, ZERO) + amt
     return out
 
 

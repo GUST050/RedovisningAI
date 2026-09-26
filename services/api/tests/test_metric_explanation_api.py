@@ -118,3 +118,51 @@ def test_explicit_comparison_flows_through_overview_and_analysis_fingerprint(mon
     }
     assert _analysis_metadata_current(analysis, metadata)
     assert not _analysis_metadata_current(analysis, {**metadata, "prompt_version": "A3-old"})
+
+
+def test_metric_comparison_api_accepts_explicit_compare_period(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    client, company_id = _client(monkeypatch)
+
+    response = client.get(f"/api/companies/{company_id}/metric-comparisons?period=2026-09&compare=2026-03")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["periods"] == {"current": "2026-09", "previous": "2026-03"}
+    assert body["labels"] == {"current": "sep 2026", "previous": "mar 2026"}
+    assert body["metrics"]["personnel_share"]["better"] == "lower"
+    same = client.get(f"/api/companies/{company_id}/metric-comparisons?period=2026-09&compare=2026-09")
+    assert same.status_code == 422
+    bad = client.get(f"/api/companies/{company_id}/metric-comparisons?period=2026-09&compare=nonsens")
+    assert bad.status_code == 422
+    detail = client.get(
+        f"/api/companies/{company_id}/metric-explanations/working_capital?period=2026-09&compare=2026-06"
+    )
+    assert detail.status_code == 200
+    assert detail.json()["periods"] == {"current": "2026-09", "previous": "2026-06"}
+
+
+def test_metric_structure_api_masks_payroll_accounts(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    client, company_id = _client(monkeypatch)
+
+    response = client.get(
+        f"/api/companies/{company_id}/metric-structure/operating_margin?end=2026-09&series=same_month&count=3"
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [p["spec"] for p in body["periods"]] == ["2024-09", "2025-09", "2026-09"]
+    assert body["base_label"] == "nettoomsättning"
+    accounts = [a["account"] for row in body["rows"] for a in row["accounts"] if a["account"] is not None]
+    assert accounts and all(account not in PAYROLL for account in accounts)
+    assert len(body["steps"]) == 2 and body["overall"]["previous"] == "2024-09"
+    assert (
+        client.get(
+            f"/api/companies/{company_id}/metric-structure/operating_margin?end=2026-09&series=veckor"
+        ).status_code
+        == 422
+    )
+    assert (
+        client.get(f"/api/companies/{company_id}/metric-structure/operating_margin?end=2026-09&count=99").status_code
+        == 422
+    )
+    assert client.get(f"/api/companies/{company_id}/metric-structure/okand?end=2026-09").status_code == 422

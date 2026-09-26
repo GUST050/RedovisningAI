@@ -433,3 +433,74 @@ def test_dev_mode_logs_in_default_user_without_login_step(env, monkeypatch) -> N
     assert env["client"].get("/api/me", headers=H("kalle@api.se")).json()["user"]["email"] == "kalle@api.se"
     monkeypatch.setattr(get_settings(), "auth_mode", "oidc")
     assert env["client"].get("/api/me").status_code == 401
+
+
+def test_report_items_rank_and_respect_audience_and_payroll(env) -> None:  # type: ignore[no-untyped-def]
+    cl, cid = env["client"], env["cid"]
+    r = cl.get(f"/api/companies/{cid}/report-items?period=YTD:2026-09&mode=yoy", headers=H("kalle@api.se"))
+    assert r.status_code == 200
+    body = r.json()
+    assert body["periods"] == {"current": "YTD:2026-09", "previous": "YTD:2025-09"}
+    assert 1 <= len(body["recommended"]) <= 6
+    ids = {i["id"] for i in body["items"]}
+    assert "metric:net_sales" in ids and set(body["recommended"]) <= ids
+    assert {s["kind"] for s in body["series"]} >= {"months", "fiscal_years", "same_month"}
+    for item in body["items"]:
+        assert not any(f"konto {a}" in item["summary"] for a in range(7000, 7700))
+    client = cl.get(
+        f"/api/companies/{cid}/report-items?period=2026-09&compare=2026-06&audience=client", headers=H("kalle@api.se")
+    ).json()
+    assert client["periods"]["previous"] == "2026-06"
+    assert all(i["kind"] != "finding" and i["audience"] == "client" for i in client["items"])
+    assert (
+        cl.get(
+            f"/api/companies/{cid}/report-items?period=2026-09&compare=2026-09", headers=H("kalle@api.se")
+        ).status_code
+        == 422
+    )
+
+
+def test_comparison_report_downloads_in_all_formats(env) -> None:  # type: ignore[no-untyped-def]
+    cl, cid = env["client"], env["cid"]
+    items = cl.get(f"/api/companies/{cid}/report-items?period=YTD:2026-09", headers=H("kalle@api.se")).json()
+    chosen = [{"id": i, "comment": "Följ upp"} for i in items["recommended"][:3]]
+    chosen.append({"id": "structure:operating_margin", "series": "fiscal_years", "count": 3})
+    base = {"period": "YTD:2026-09", "mode": "yoy", "items": chosen, "title": "Kvartalsgenomgång"}
+    pdf = cl.post(f"/api/companies/{cid}/reports/comparison", headers=H("kalle@api.se"), json={**base, "format": "pdf"})
+    assert pdf.status_code == 200, pdf.text
+    assert pdf.content.startswith(b"%PDF")
+    assert "filename*=UTF-8''" in pdf.headers["content-disposition"]
+    # Läsaren Vera är inte tilldelad kunden och ser den inte alls (RLS).
+    assert cl.post(f"/api/companies/{cid}/reports/comparison", headers=H("vera@api.se"), json=base).status_code == 404
+    docx = cl.post(
+        f"/api/companies/{cid}/reports/comparison", headers=H("admin@api.se"), json={**base, "format": "docx"}
+    )
+    assert docx.status_code == 200
+    xlsx = cl.post(
+        f"/api/companies/{cid}/reports/comparison",
+        headers=H("kalle@api.se"),
+        json={**base, "format": "xlsx", "audience": "client"},
+    )
+    assert xlsx.status_code == 200
+    wb = load_workbook(io.BytesIO(xlsx.content))
+    assert wb.sheetnames[0] == "Sammanfattning"
+    with tenant_session(TenantContext(env["org"].org_id, env["org"].admin_user_id, "ADMIN")) as s:
+        events = s.scalars(select(m.AuditEvent).where(m.AuditEvent.action == "report.comparison_exported")).all()
+        assert len(events) >= 3
+        assert events[-1].details["audience"] == "client"
+
+
+def test_comparison_report_rejects_invalid_selection(env) -> None:  # type: ignore[no-untyped-def]
+    cl, cid = env["client"], env["cid"]
+    url = f"/api/companies/{cid}/reports/comparison"
+    unknown = cl.post(url, headers=H("kalle@api.se"), json={"period": "2026-09", "items": [{"id": "metric:okand"}]})
+    assert unknown.status_code == 422
+    empty = cl.post(url, headers=H("kalle@api.se"), json={"period": "2026-09", "items": []})
+    assert empty.status_code == 422
+    internal = cl.get(f"/api/companies/{cid}/report-items?period=2026-09", headers=H("admin@api.se")).json()
+    finding = next((i["id"] for i in internal["items"] if i["kind"] == "finding"), None)
+    if finding is not None:
+        client = cl.post(
+            url, headers=H("admin@api.se"), json={"period": "2026-09", "audience": "client", "items": [{"id": finding}]}
+        )
+        assert client.status_code == 422

@@ -25,7 +25,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <MeContext.Provider value={me}>
       <header className="border-b border-line bg-white">
-        <div className="mx-auto flex max-w-[1400px] items-center gap-6 px-5 py-3">
+        <div className="mx-auto flex max-w-[1400px] flex-wrap items-center gap-x-6 gap-y-2 px-5 py-3">
           <Link href="/" className="text-[15px] font-bold tracking-tight text-brand">RedovisningAI</Link>
           <nav className="flex gap-1">
             {nav.map((n) => (
@@ -38,10 +38,10 @@ export function AppShell({ children }: { children: ReactNode }) {
               </Link>
             ))}
           </nav>
-          <div className="ml-auto flex items-center gap-3 text-[12px] text-muted">
+          <div className="ml-auto flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted">
             {me && (
               <>
-                <span>{me.org.name}</span>
+                <span className="hidden sm:inline">{me.org.name}</span>
                 <span className="rounded bg-canvas px-2 py-0.5">{me.user.name} · {me.role === "ADMIN" ? "Byråadmin" : me.role === "CONSULTANT" ? "Konsult" : "Läsare"}</span>
                 {me.permissions.payroll && <span title="Behörighet: Lönedata">💼</span>}
                 {me.permissions.aml && <span title="Behörighet: PTL-ansvarig">🛡</span>}

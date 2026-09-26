@@ -17,6 +17,8 @@ BALANCE_COMPONENTS = frozenset(
         "cash",
         "receivables",
         "payables",
+        "inventory",
+        "short_investments",
         "total_equity",
         "untaxed_reserves",
         "total_assets",
@@ -249,13 +251,17 @@ def evidence_for_component(
         previous_all = sorted(_income_rows(index, component, "previous", pair.previous), key=_sort_key)
         current_rows, previous_rows = current_all[:limit], previous_all[:limit]
         has_period_balance = any(
-            index.coverage.get(m) == "psaldo" for period in (pair.current, pair.previous) for m in period.months()
+            index.coverage.get(m) in ("psaldo", "annual")
+            for period in (pair.current, pair.previous)
+            for m in period.months()
         )
         source_level = (
             "account_voucher" if current_all or previous_all else "period_balance" if has_period_balance else "account"
         )
         if has_period_balance:
-            warnings.append("Källan innehåller periodsaldon; endast befintliga verifikationsrader visas.")
+            warnings.append(
+                "Källan innehåller period- eller årssaldon utan verifikationer; endast befintliga verifikationsrader visas."
+            )
         elif not (current_all or previous_all):
             warnings.append("Inga verifikationsrader finns för komponentens konton i perioderna.")
 

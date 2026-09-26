@@ -11,7 +11,7 @@ Teckenförklaring: ✅ klart och testat · 🟡 delvis · ⏳ inte byggt ännu �
 |---|---|---|---|
 | 1 | Repo, Docker Compose (Postgres, MinIO, PgBouncer), FastAPI, Next.js, CI | ✅ | `docker-compose.yml`, `.github/workflows/ci.yml`. Hela stacken är verifierad i Docker med webbläsartest. |
 | 2 | Organisation, användare, kunder, roller, RLS | ✅ | `db/models.py`, `migrations/0002`. RLS med FORCE; läckagetest genom PgBouncer. |
-| 3 | SIE4-parser, filuppladdning, massuppladdning (zip) | ✅ | `sie/parser.py`, `POST /imports`, `POST /imports/bulk` (kopplas via orgnr) |
+| 3 | SIE4-parser, filuppladdning, massuppladdning (zip) | ✅ | `sie/parser.py`, `POST /imports`, `POST /imports/bulk` (kopplas via orgnr). Även CSV/Excel-export och standardformat, se nedan. |
 | 4 | Fortnox-koppling | 🟡 | `connectors/fortnox.py`: servicekonto, SIE4 per år, hastighetsgräns, nattlig synk, kopplingshälsa. Testad mot simulerat API, inte mot Fortnox sandbox (👤 kräver utvecklarkonto). |
 | 5 | Verifikationsversionering, ändringsdiff, `account_period_balance` | ✅ | `db/repo.py` |
 | 6 | Periodmotor, RR/BR, golden tests | ✅ | `accounting/`, `tests/fixtures/golden_small.se` |
@@ -38,6 +38,20 @@ Teckenförklaring: ✅ klart och testat · 🟡 delvis · ⏳ inte byggt ännu �
 | 17 | A5 AI-analytiker med läsverktyg och budget | ✅ | `ai/tools.py`, fliken *AI-analytiker* |
 | 18 | Händelselogg, AI-märkning, CSP | ✅ | Loggen går inte att ändra i databasen. 👤 Penetrationstest utförs av extern part. |
 | 19 | Fortnox appgranskning och listning | 👤 | Kräver partneravtal och granskning hos Fortnox |
+
+## Standardformat, jämförelser och rapport (2026-09-26)
+
+| Del | Status | Var |
+|---|---|---|
+| Standardformat (JSON, `redovisningai.ledger` v1.0) för all bokföring, export och import utan förlust | ✅ | `standard/format.py`, [STANDARDFORMAT.md](STANDARDFORMAT.md), `GET /export/ledger.json` (kräver Lönedata), `redovisningai convert` |
+| Import av verifikationslista/huvudbok som CSV eller Excel (t.ex. export från Fortnox) med kolumnigenkänning | ✅ | `standard/tabular.py`, `standard/loader.py`. Platta, grupperade och huvudbokslayouter; IB-rader; del av år ersätter bara sina månader. 👤 Behöver verifieras mot riktiga exportfiler från Fortnox m.fl. |
+| Ärlig datastatus: saknad IB och ej täckta månader ger *otillräckligt underlag*, inte noll | ✅ | `YearData.opening_status`/`covered_months`, `LedgerIndex.balance_complete`. IB härleds ur föregående års UB eller verifikationer. |
+| Helårsjämförelse även när föregående år bara finns som sammandrag (#RES/#UB) i årets SIE-fil | ✅ | `LedgerIndex.annual`. Enskilda månader i sammandragsåret förblir saknade. |
+| 17 nyckeltal (nya: bruttovinst, EBITDA, externa kostnader i % av omsättningen, rörelsekapital) med exakta bryggor | ✅ | `accounting/metrics.py`, `metric_explanations.py`. Nämnaren märks i kvotbryggor. |
+| Fritt vald jämförelseperiod (valfri period av samma slag) utöver föregående period och samma period i fjol | ✅ | `comparison_pair(..., "custom", compare)`, `?compare=` i API:t. Pågående perioder märks. |
+| Uppbyggnad över tid: byggstenar per period, andel av bas, konton, bryggor mellan perioderna | ✅ | `accounting/structure.py`, `GET /metric-structure/{kod}`. Månader, kvartal, räkenskapsår, samma månad per år, YTD per år, R12. |
+| Viktigaste skillnaderna: deterministisk rangordning med redovisade poäng, högst ett förslag per område | ✅ | `analytics/differences.py`, `GET /report-items` |
+| Rapport av valda skillnader och jämförelser (intern eller kund, PDF/Word/Excel) med kommentarer | ✅ | `reports/comparison_report.py`, `POST /reports/comparison`, fliken *Jämförelse & rapport*, `redovisningai compare`. Urvalet valideras mot serverns egna poster; kundrapporten saknar analysfynd, verifikationer och enskilda lönekonton. |
 
 ## Fas 4 – V1.5
 
@@ -72,7 +86,9 @@ BankID, prognoser. Inloggning via OIDC finns (fungerar med Entra ID). 👤 ISO 2
 
 ## Testning (§12)
 
-- 122 automatiska tester: parser (inkl. CP437, #RTRANS/#BTRANS, brutna räkenskapsår), golden
+- 270 automatiska tester (2026-09-26; 2 kräver PgBouncer och hoppas över lokalt utan den):
+  standardformatets rundresa, CSV/Excel-layouter, uppbyggnad över tid, rangordning och rapporter,
+  samt tidigare parser (inkl. CP437, #RTRANS/#BTRANS, brutna räkenskapsår), golden
   tests för RR/BR, regler med datumgränsfall, fyndlivscykel, AI-verifierare och
   pseudonymisering, RLS (byrå/kund/lön/PTL/läsare/publik länk), PgBouncer-läckagetest, API och
   kopplingar.

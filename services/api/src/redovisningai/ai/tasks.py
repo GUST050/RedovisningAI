@@ -447,7 +447,8 @@ periodiseras kostnader bara vid bokslut ska du säga det.""",
                 }
             )
         for finding in package.get("findings", [])[:2]:
-            accounts = ", ".join(str(a) for a in finding.get("accounts", []))
+            # "/" som skiljetecken: "1910, 1930" skulle läsas som ett enda tal av verifieraren.
+            accounts = "/".join(str(a) for a in finding.get("accounts", []))
             account_text = f" för konto {accounts}" if accounts else ""
             fact_id = finding.get("amount_fact_id")
             fact_ids = list(finding.get("fact_ids", []))

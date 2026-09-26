@@ -24,6 +24,7 @@
    - 3.13 AI-analytikern (fråga fritt)
    - 3.14 Dokumentation och revisionslogg
    - 3.15 Behörigheter och känsliga uppgifter
+   - 3.16 Jämförelse och rapport – "vad har förändrats, och vad ska kunden få veta?"
 4. [Funktioner i senare versioner](#4-funktioner-i-senare-versioner)
 5. [Så används AI – och så används den inte](#5-så-används-ai--och-så-används-den-inte)
 6. [Vad programmet inte gör](#6-vad-programmet-inte-gör)
@@ -100,6 +101,8 @@ MINA KUNDER – SEPTEMBER 2026                          Sortering: behöver dig 
 **Hur det fungerar:**
 - **Fortnox:** du skickar en auktoriseringslänk. En administratör hos kunden, eller du via byråbehörighet, godkänner kopplingen en gång. Programmet hämtar sedan hela räkenskapsåret som en SIE4-fil via Fortnox API varje natt. Vid första kopplingen hämtas även de två föregående åren, så att jämförelser bakåt fungerar direkt.
 - **Övriga system (Spiris, Björn Lundén, Hogia, Bokio …):** du exporterar en SIE4-fil och laddar upp den. Du kan ladda upp **många filer samtidigt** (t.ex. en zip-fil). Programmet läser organisationsnumret i varje fil och kopplar den till rätt kund.
+- **Verifikationslista eller huvudbok som CSV eller Excel** (t.ex. en export från Fortnox): programmet känner igen kolumnerna på rubrikerna ("Vernr", "Datum", "Konto", "Debet", "Kredit", "Belopp" …) och visar vilka kolumner det tolkade. Saknas ingående balanser eller täcker filen bara några månader syns det tydligt – de månaderna och balansposterna räknas som saknade, aldrig som noll. Se [STANDARDFORMAT.md](STANDARDFORMAT.md).
+- **Samma standardformat för allt:** oavsett källa översätts bokföringen till samma normaliserade form innan något räknas. Den kan laddas ner som en JSON-fil (standardformatet) och läsas in igen.
 - **Kopplingshälsa:** för varje kund visas om kopplingen fungerar, när senaste lyckade hämtning var och eventuella fel (t.ex. "auktoriseringen har gått ut").
 
 **Exempel:** "Konsult X AB – senast hämtad i natt 02:14 ✓" eller "Bygg & Co AB – Fortnox svarar inte sedan 3 dagar ⚠".
@@ -236,6 +239,7 @@ Tidigare:       Inget liknande beslut hos denna kund
 
 **Flikar:**
 - **Översikt:** månadens status, ärenden, nyckeltal och viktigaste förändringar.
+- **Jämförelse & rapport:** välj perioder att jämföra, se hur nyckeltalen är uppbyggda över tid och skapa en rapport av de viktigaste skillnaderna (3.16).
 - **Ärenden:** alla öppna och stängda ärenden (3.6).
 - **Resultat- och balansräkning:** månad, hittills i år (YTD) och rullande 12 månader, jämfört med föregående år. Uppställning enligt K2/K3.
 - **Nyckeltal:** t.ex. rörelsemarginal, soliditet, kassalikviditet. Varje nyckeltal har en "Så räknas detta"-förklaring. Om underlaget inte räcker visas "otillräckligt underlag" i stället för en missvisande siffra.
@@ -372,6 +376,28 @@ Klick på "Konsulttjänster" visar vilka konton och verifikationer som ligger ba
 - **Godkänna kundrapport.**
 
 **Hur det fungerar:** behörigheten kontrolleras på två nivåer, i programmet och direkt i databasen. Även om en bugg skulle uppstå i programmet kan en konsult inte se en kund hen saknar behörighet till, och en byrå kan aldrig se en annan byrås data.
+
+---
+
+### 3.16 Jämförelse och rapport – "vad har förändrats, och vad ska kunden få veta?" [MVP]
+
+**Vad det är:** en arbetsyta för att jämföra perioder på djupet och göra en rapport av det viktigaste.
+
+**Vad det gör för dig:** du ser inte bara att rörelsemarginalen sjönk, utan *vilka* poster som gjorde det, hur marginalen är uppbyggd månad för månad eller år för år, och vilka konton som ligger bakom. Programmet föreslår de viktigaste skillnaderna; du väljer, kommenterar och får en färdig rapport.
+
+**Hur det fungerar:**
+1. **Välj jämförelse:** månad, kvartal, hittills i år, räkenskapsår eller rullande 12 månader – mot samma period i fjol, föregående period eller en period du väljer själv (t.ex. september mot mars). Perioderna måste vara av samma slag och längd; ett pågående år märks så att nio månader inte jämförs som ett helt år.
+2. **Nyckeltal:** 17 nyckeltal, t.ex. nettoomsättning, bruttovinst, EBITDA, rörelse-, brutto- och vinstmarginal, personal- och externa kostnader i procent av omsättningen, soliditet, likviditet, rörelsekapital, kassa, kundfordringar och leverantörsskulder. Förändring i kronor eller procentenheter.
+3. **Uppbyggnad över tid:** för valt nyckeltal visas byggstenarna i varje period – till exempel omsättning, material, externa kostnader, personal och avskrivningar i procent av omsättningen för rörelsemarginalen – med konton under varje rad och en exakt brygga mellan varje par av perioder (vad som förändrade nyckeltalet). Serierna kan vara månader i följd, kvartal, räkenskapsår, samma månad varje år, hittills i år år för år eller rullande 12 månader.
+4. **Viktigaste skillnaderna:** alla jämförelser – nyckeltal, resultat- och balansrader, kostnadskategorier (IT, konsulter, lokaler …) och analysfynd – rangordnas med fasta, redovisade poäng: förändringens storlek i förhållande till omsättningen (resultatposter) eller balansomslutningen (balansposter), beloppet och den relativa förändringen. Högst en post per område föreslås, så att rörelseresultat, EBITDA och resultat efter finansiella poster inte alla föreslås för samma förändring.
+5. **Rapport:** kryssa i det som ska med, skriv kommentarer, välj mottagare (intern eller kund) och format (PDF, Word, Excel). Rapporten innehåller en sammanfattning, en tabell över valda nyckeltal, en sektion per post med brygga eller konton, och (valfritt) en bilaga med alla nyckeltal.
+
+**Skydd:**
+- Siffrorna räknas om på servern när rapporten skapas; urvalet från webbläsaren styr bara *vilka* poster som tas med.
+- Kundrapporten innehåller aldrig analysfynd, verifikationer eller enskilda lönekonton (lönekonton slås ihop).
+- Texterna beskriver bokförda förändringar, aldrig orsaker. Ingen text skrivs av AI.
+
+**Exempel på text i rapporten:** *"Övriga externa kostnader ökade från 717 tkr till 1,38 Mkr (+91,9 %); påverkan på resultatet −659 tkr. Störst påverkan: konto 6550 Konsultarvoden (−618 tkr)."*
 
 ---
 

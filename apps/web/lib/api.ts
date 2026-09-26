@@ -49,6 +49,49 @@ export function download(path: string) {
   window.location.href = path;
 }
 
+/** POST som svarar med en fil (t.ex. en rapport) – sparas med filnamnet från servern. */
+export async function downloadPost(path: string, body: unknown, fallbackName: string): Promise<void> {
+  const res = await fetch(path, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    await handle<unknown>(res);
+    return;
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  // Serverns ASCII-namn ("jamforelse" i stället för "jämförelse"): alla webbläsare sparar det
+  // oförändrat, medan namn med å/ä/ö från blob-länkar ibland ersätts med "download".
+  link.download = filenameFromDisposition(res.headers.get("content-disposition"), { ascii: true }) ?? fallbackName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+export function filenameFromDisposition(header: string | null, opts: { ascii?: boolean } = {}): string | null {
+  if (!header) return null;
+  if (opts.ascii) {
+    const ascii = /filename="([^"]+)"/i.exec(header);
+    if (ascii) return ascii[1];
+  }
+  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(header);
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded[1]);
+    } catch {
+      /* fall tillbaka på ASCII-namnet */
+    }
+  }
+  const plain = /filename="([^"]+)"/i.exec(header);
+  return plain ? plain[1] : null;
+}
+
 // ------------------------------------------------------------------------ typer
 
 export type Me = {
@@ -97,6 +140,8 @@ export type MetricComparison = {
   code: string;
   label: string;
   unit: string;
+  better?: "higher" | "lower" | "neutral";
+  formula?: string;
   current: string | null;
   previous: string | null;
   change: string | null;
@@ -107,9 +152,98 @@ export type MetricComparison = {
 
 export type MetricComparisons = {
   periods: { current: string; previous: string };
+  labels?: { current: string; previous: string };
   status: string;
   warnings: string[];
+  notices?: string[];
   metrics: Record<string, MetricComparison>;
+};
+
+export type DifferenceItem = {
+  id: string;
+  kind: "metric" | "line" | "category" | "finding";
+  code: string;
+  title: string;
+  summary: string;
+  unit: string;
+  current: string | null;
+  previous: string | null;
+  change: string | null;
+  change_pct: string | null;
+  status: string;
+  score: number;
+  score_parts: Record<string, number>;
+  reason: string;
+  audience: "client" | "internal";
+  better: string | null;
+  warnings: string[];
+  selectable: boolean;
+  recommended: boolean;
+  family: string | null;
+  not_recommended: string | null;
+};
+
+export type SeriesKind = { kind: string; label: string; max: number; default: number };
+
+export type ReportItems = {
+  periods: { current: string; previous: string };
+  labels: { current: string; previous: string };
+  status: string;
+  warnings: string[];
+  notices: string[];
+  audience: "internal" | "client";
+  items: DifferenceItem[];
+  recommended: string[];
+  series: SeriesKind[];
+};
+
+export type StructurePoint = {
+  spec: string;
+  label: string;
+  short: string;
+  open: boolean;
+  status: string;
+  value: string | null;
+  display: string;
+  missing_months: string[];
+  note: string | null;
+};
+
+export type StructureRow = {
+  code: string;
+  label: string;
+  role: "component" | "numerator" | "denominator";
+  values: (string | null)[];
+  shares: (string | null)[];
+  accounts: { account: number | null; name: string; values: (string | null)[] }[];
+  note: string | null;
+};
+
+export type StructureStep = {
+  current: string;
+  previous: string;
+  current_label: string;
+  previous_label: string;
+  status: string;
+  change: string | null;
+  components: { code: string; label: string; effect: string }[];
+  warnings: string[];
+};
+
+export type MetricStructure = {
+  code: string;
+  label: string;
+  unit: string;
+  formula: string;
+  better: string;
+  series: string;
+  series_label: string;
+  periods: StructurePoint[];
+  rows: StructureRow[];
+  base_label: string | null;
+  steps: StructureStep[];
+  overall: StructureStep | null;
+  warnings: string[];
 };
 
 export type MetricEvidenceRow = {
@@ -141,6 +275,7 @@ export type MetricExplanation = MetricComparison & {
   components: {
     code: string;
     label: string;
+    role?: "component" | "numerator" | "denominator";
     current: string;
     previous: string;
     effect: string;
@@ -201,6 +336,7 @@ export type Overview = {
   recommended_view: string;
   sections: Record<string, { period: { spec: string; label: string }; compare: { spec: string; label: string }; metrics: Record<string, MetricEntry> }>;
   months_with_data: string[];
+  fiscal_years?: { start: string; end: string; has_vouchers: boolean }[];
 };
 
 export type Maturity = {

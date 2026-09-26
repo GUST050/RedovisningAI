@@ -1,14 +1,19 @@
 # RedovisningAI
 
-Granskningsverktyg för redovisningsbyråer. Verktyget läser kundernas bokföring (SIE4-fil eller
-Fortnox), räknar fram resultat- och balansräkning och nyckeltal, kör svenska kontroller och
-grupperar fynden till ett fåtal ärenden per kund och månad. AI används för text (kommentarer,
-kundfrågor, mötesunderlag) och för att föreslå grupperingar. AI räknar aldrig själv: alla
-siffror kommer från beräkningsmotorn och verifieras innan de visas.
+Granskningsverktyg för redovisningsbyråer. Verktyget läser kundernas bokföring (SIE-fil, Fortnox,
+eller en verifikationslista/huvudbok som CSV eller Excel) och översätter allt till ett gemensamt
+standardformat. Därifrån räknas resultat- och balansräkning och 17 nyckeltal fram, och
+nyckeltalen kan jämföras mellan valfria perioder – månad, kvartal, hittills i år, räkenskapsår och
+rullande 12 månader – ner till vad varje nyckeltal är uppbyggt av, konto för konto. De viktigaste
+skillnaderna föreslås automatiskt och konsulten väljer vad som ska med i en rapport (PDF, Word,
+Excel). Svenska kontroller grupperas till ett fåtal ärenden per kund och månad. AI används för text
+(kommentarer, kundfrågor, mötesunderlag) och för att föreslå grupperingar. AI räknar aldrig själv:
+alla siffror kommer från beräkningsmotorn och verifieras innan de visas.
 
 - **Plan:** [docs/PLAN.md](docs/PLAN.md)
 - **Funktionerna förklarade:** [docs/FUNKTIONER.md](docs/FUNKTIONER.md)
 - **Vad som är byggt och vad som återstår:** [docs/STATUS.md](docs/STATUS.md)
+- **Standardformat och importformat (SIE, Fortnox, CSV, Excel, JSON):** [docs/STANDARDFORMAT.md](docs/STANDARDFORMAT.md)
 
 ## Struktur
 
@@ -16,7 +21,9 @@ siffror kommer från beräkningsmotorn och verifieras innan de visas.
 services/api/     Python 3.11+: SIE-parser, ekonomimotor, kontroller, AI-lager, FastAPI, jobb, CLI
   src/redovisningai/
     sie/          SIE4-parser (PC8/CP437, #RTRANS/#BTRANS, #PSALDO/#PBUDGET) och skrivare
-    accounting/   perioder, saldon, RR/BR (K2/K3), nyckeltal, variansbrygga, kostnadsträd
+    standard/     standardformatet (JSON), CSV/Excel-import (verifikationslista, huvudbok), formatigenkänning
+    accounting/   perioder, saldon, RR/BR (K2/K3), 17 nyckeltal, exakta förändringsbryggor, jämförelsepar,
+                  uppbyggnad över tid (structure.py), variansbrygga, kostnadsträd
     maturity/     periodmognad (fakturametod/kontantmetod, periodiseringar, fullständighet)
     rules/        regelkatalog (TOML, med lagstöd och giltighetsdatum), satser, 25 kontroller, PTL-signaler
     findings/     fyndens livscykel, undertryckning, precision per regel
@@ -28,7 +35,8 @@ services/api/     Python 3.11+: SIE-parser, ekonomimotor, kontroller, AI-lager, 
     api/          FastAPI
     jobs/         import- och granskningspipeline, bakgrundsarbetare (Procrastinate), retention
     connectors/   Fortnox (servicekonto, SIE4 per år, hastighetsbegränsning)
-    reports/      PDF, Word och Excel (kundrapport, internrapport, Reko-dokumentation)
+    analytics/    viktigaste skillnaderna (differences.py), analysfynd, spend, budget, skattekonto
+    reports/      PDF, Word och Excel (jämförelserapport, kundrapport, internrapport, Reko-dokumentation)
   migrations/     Alembic (schema, RLS-policyer, funktioner)
   tests/          API-/databastester, bl.a. RLS-läckage genom PgBouncer i transaktionsläge
 apps/web/         Next.js 16: portfölj, kundens arbetsyta, publik svarssida, regler och inställningar
@@ -107,6 +115,36 @@ redovisningai analyze demo/Bygg_och_Co_AB_*.se --out rapport/
 ```
 
 Skriver Excel med RR/BR, ärenden och fynd, en intern PDF och ett utkast till kundrapport.
+Filerna kan vara SIE, CSV/Excel-export eller standardformat – även blandat (t.ex. förra årets SIE
+och årets verifikationslista).
+
+```bash
+# Valfri källa → standardformatet (JSON)
+redovisningai convert demo/Bygg_och_Co_AB_2025.se export.csv --out bokforing.json
+
+# Jämför två perioder och skriv en rapport med de viktigaste skillnaderna
+redovisningai compare demo/Bygg_och_Co_AB_*.se --period YTD:2026-09 --out rapport/
+redovisningai compare demo/Bygg_och_Co_AB_*.se --period 2026-09 --compare 2026-03 \
+    --structure operating_margin:months:12 --audience client --format docx --out rapport/
+```
+
+`compare` skriver ut alla nyckeltal och de föreslagna skillnaderna och skapar rapporten (PDF, Word
+eller Excel). `--items` väljer egna poster, `--structure nyckeltal:serie:antal` lägger till
+utveckling över tid (serie: `months`, `quarters`, `fiscal_years`, `same_month`, `ytd`, `r12`).
+
+## Jämförelse och rapport i webben
+
+Fliken **Jämförelse & rapport** hos varje kund:
+
+1. **Välj jämförelse** – månad, kvartal, hittills i år, räkenskapsår eller rullande 12 månader, mot
+   samma period i fjol, föregående period eller en fritt vald period av samma slag.
+2. **Nyckeltal** – alla 17 nyckeltal med förändring (kr eller procentenheter).
+3. **Uppbyggnad över tid** – ett nyckeltals byggstenar period för period (t.ex. varje kostnadsslag i
+   procent av omsättningen), konton under varje rad och exakta bryggor mellan perioderna.
+4. **Viktigaste skillnaderna** – rangordnade med redovisade poäng; högst en per område föreslås.
+   Kryssa i, skriv kommentarer.
+5. **Skapa rapport** – intern eller till kund, PDF/Word/Excel. Kundrapporten innehåller aldrig
+   analysfynd, verifikationer eller enskilda lönekonton.
 
 ## AI
 

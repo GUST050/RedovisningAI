@@ -45,6 +45,9 @@ class MetricDefinition:
     compute: Callable[[MetricContext], MetricResult]
     period_based: bool = True  # False = mäts vid periodens slut (balansnyckeltal)
     needs_maturity: bool = False  # påverkas av periodiseringsgrad
+    # Vilket håll som normalt är gynnsamt: "higher", "lower" eller "neutral" (t.ex. kundfordringar,
+    # där både ökning och minskning kan vara bra). Används för färg och formulering, aldrig för beslut.
+    better: str = "higher"
 
 
 def _q(x: Decimal, places: str = "0.1") -> Decimal:
@@ -116,6 +119,33 @@ def _personnel_share(ctx: MetricContext) -> MetricResult:
     ns, p = st.line("net_sales").amount, st.line("personnel").amount
     v = _ratio_pct(-p, ns)
     return MetricResult(v, _status(ctx, v, True), {"personnel": str(p), "net_sales": str(ns)})
+
+
+def _gross_profit(ctx: MetricContext) -> MetricResult:
+    st = _is(ctx)
+    ns, mat = st.line("net_sales").amount, st.line("materials").amount
+    v = ns + mat
+    return MetricResult(v, _status(ctx, v), {"net_sales": str(ns), "materials": str(mat)})
+
+
+def _ebitda(ctx: MetricContext) -> MetricResult:
+    st = _is(ctx)
+    orr, dep = st.line("operating_result").amount, st.line("depreciation").amount
+    v = orr - dep
+    return MetricResult(v, _status(ctx, v, True), {"operating_result": str(orr), "depreciation": str(dep)})
+
+
+def _external_cost_share(ctx: MetricContext) -> MetricResult:
+    st = _is(ctx)
+    ns, ext = st.line("net_sales").amount, st.line("other_external").amount
+    v = _ratio_pct(-ext, ns)
+    return MetricResult(v, _status(ctx, v, True), {"other_external": str(ext), "net_sales": str(ns)})
+
+
+def _working_capital(ctx: MetricContext) -> MetricResult:
+    bs = _bs(ctx)
+    ca, cl = bs.line("current_assets").amount, bs.line("current_liabilities").amount
+    return MetricResult(ca - cl, FactStatus.CALCULATED, {"current_assets": str(ca), "current_liabilities": str(cl)})
 
 
 def _equity_ratio(ctx: MetricContext) -> MetricResult:
@@ -212,6 +242,23 @@ REGISTRY: dict[str, MetricDefinition] = {
             needs_maturity=True,
         ),
         MetricDefinition(
+            "gross_profit",
+            "Bruttovinst",
+            "1",
+            Unit.SEK,
+            "Nettoomsättning minus råvaror, förnödenheter och handelsvaror (konton 4000–4939).",
+            _gross_profit,
+        ),
+        MetricDefinition(
+            "ebitda",
+            "Rörelseresultat före avskrivningar (EBITDA)",
+            "1",
+            Unit.SEK,
+            "Rörelseresultat plus av- och nedskrivningar (konton 7700–7899).",
+            _ebitda,
+            needs_maturity=True,
+        ),
+        MetricDefinition(
             "gross_margin",
             "Bruttomarginal",
             "1",
@@ -227,6 +274,17 @@ REGISTRY: dict[str, MetricDefinition] = {
             "Personalkostnader (7000–7699) / nettoomsättning × 100.",
             _personnel_share,
             needs_maturity=True,
+            better="lower",
+        ),
+        MetricDefinition(
+            "external_cost_share",
+            "Övriga externa kostnader i % av omsättningen",
+            "1",
+            Unit.PERCENT,
+            "Övriga externa kostnader (5000–6999) / nettoomsättning × 100.",
+            _external_cost_share,
+            needs_maturity=True,
+            better="lower",
         ),
         MetricDefinition(
             "equity_ratio",
@@ -257,6 +315,16 @@ REGISTRY: dict[str, MetricDefinition] = {
             period_based=False,
         ),
         MetricDefinition(
+            "working_capital",
+            "Rörelsekapital",
+            "1",
+            Unit.SEK,
+            "Omsättningstillgångar minus kortfristiga skulder vid periodens slut.",
+            _working_capital,
+            period_based=False,
+            better="neutral",
+        ),
+        MetricDefinition(
             "cash",
             "Kassa och bank",
             "1",
@@ -266,10 +334,24 @@ REGISTRY: dict[str, MetricDefinition] = {
             period_based=False,
         ),
         MetricDefinition(
-            "receivables", "Kundfordringar", "1", Unit.SEK, "Saldo konton 1500–1599.", _receivables, period_based=False
+            "receivables",
+            "Kundfordringar",
+            "1",
+            Unit.SEK,
+            "Saldo konton 1500–1599.",
+            _receivables,
+            period_based=False,
+            better="neutral",
         ),
         MetricDefinition(
-            "payables", "Leverantörsskulder", "1", Unit.SEK, "Saldo konton 2440–2449.", _payables, period_based=False
+            "payables",
+            "Leverantörsskulder",
+            "1",
+            Unit.SEK,
+            "Saldo konton 2440–2449.",
+            _payables,
+            period_based=False,
+            better="neutral",
         ),
     ]
 }
@@ -302,6 +384,13 @@ def calculate_metric(
     try:
         if not index.has_data(period):
             res = MetricResult(None, FactStatus.INSUFFICIENT_DATA, {}, note="Perioden saknar fullständig datatäckning.")
+        elif not definition.period_based and not index.balance_complete(period.end):
+            res = MetricResult(
+                None,
+                FactStatus.INSUFFICIENT_DATA,
+                {},
+                note="Ingående balanser eller tidigare månader i räkenskapsåret saknas; balansposten kan inte beräknas.",
+            )
         else:
             res = definition.compute(ctx)
     except Exception as exc:  # beräkningsfel ska synas, inte krascha analysen

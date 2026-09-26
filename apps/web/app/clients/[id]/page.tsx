@@ -6,6 +6,7 @@ import { Suspense, useCallback, useMemo, useState } from "react";
 import { AppShell, useMe } from "@/components/AppShell";
 import { ClientContext, type ClientCtx, type Company, type View, VoucherModal } from "@/components/client/shared";
 import { OverviewTab } from "@/components/client/OverviewTab";
+import { ComparisonTab } from "@/components/client/ComparisonTab";
 import { CasesTab } from "@/components/client/CasesTab";
 import { StatementsTab } from "@/components/client/StatementsTab";
 import { CostsTab } from "@/components/client/CostsTab";
@@ -91,6 +92,7 @@ function ClientWorkspace() {
   const openCases = (cases.data ?? []).filter((c) => c.status !== "CLOSED");
   const tabs: Tab[] = [
     { id: "overview", label: "Översikt" },
+    { id: "compare", label: "Jämförelse & rapport" },
     { id: "cases", label: "Ärenden", badge: openCases.filter((c) => c.severity === "HIGH").length },
     { id: "statements", label: "Resultat & balans" },
     { id: "costs", label: "Kostnader" },
@@ -173,6 +175,7 @@ function ClientWorkspace() {
       ) : (
         <ClientContext.Provider value={ctx}>
           {tab === "overview" && ctx && <OverviewTab />}
+          {tab === "compare" && ctx && <ComparisonTab />}
           {tab === "cases" && ctx && <CasesTab onChanged={() => cases.reload()} />}
           {tab === "statements" && ctx && <StatementsTab />}
           {tab === "costs" && ctx && <CostsTab />}

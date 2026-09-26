@@ -51,6 +51,8 @@ jobs:
         run: |
           redovisningai demo-sie --out /tmp/demo
           redovisningai analyze /tmp/demo/*Bygg*.se --out /tmp/rapport
+          redovisningai convert /tmp/demo/*Bygg*.se --out /tmp/rapport/bygg.json
+          redovisningai compare /tmp/demo/*Bygg*.se --period YTD:2026-09 --structure operating_margin:same_month:3 --out /tmp/rapport
           ls -la /tmp/rapport
 
   web:

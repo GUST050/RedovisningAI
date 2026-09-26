@@ -183,7 +183,9 @@ function FindingRow({ item, metrics, onSelectMetric }: { item: AnalysisFinding; 
 }
 
 function MetricTile({ metric, selected, onSelect }: { metric: MetricComparison; selected: boolean; onSelect: () => void }) {
-  const trend = metric.change?.startsWith("-") ? "text-high" : metric.change && metric.change !== "0" ? "text-ok" : "text-muted";
+  // Färgen följer nyckeltalets riktning: för t.ex. personalkostnadsandel är en minskning positiv.
+  const n = metric.change === null ? 0 : Number(metric.change);
+  const trend = n === 0 || metric.better === "neutral" ? "text-muted" : (metric.better === "lower" ? n < 0 : n > 0) ? "text-ok" : "text-high";
   return (
     <button
       type="button"
@@ -218,7 +220,7 @@ function MetricDetail({ code, period, mode, summary, base }: { code: string; per
           {explanation.components.map((component) => (
             <div key={component.code} className="rounded border border-line bg-white p-3">
               <div className="flex flex-wrap justify-between gap-2 text-[13px]">
-                <strong>{component.label}</strong>
+                <strong>{component.label}{component.role === "denominator" && <span className="font-normal text-muted"> (nämnare)</span>}</strong>
                 <span className="tabular-nums">Bidrag {amount(component.effect, component.unit, true, true)}</span>
               </div>
               {component.note && <p className="mt-1 text-[12px] text-muted">{component.note}</p>}

@@ -16,17 +16,18 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from redovisningai.accounting.comparisons import comparison_pair
 from redovisningai.accounting.metric_evidence import evidence_for_component
 from redovisningai.accounting.metric_explanations import explain_metric
 from redovisningai.accounting.metrics import REGISTRY
 from redovisningai.accounting.periods import same_period_previous_year
+from redovisningai.accounting.structure import SERIES_KINDS, metric_structure, period_series
 from redovisningai.analytics.budget import budget_vs_actual
 from redovisningai.analytics.finding_candidates import FindingCandidate, collect_candidates
 from redovisningai.analytics.spend import spend_report
 from redovisningai.analytics.tax_account import parse_tax_account_csv, reconcile_tax_account
 from redovisningai.api.deps import (
     Principal,
+    comparison_for,
     db,
     get_company,
     get_principal,
@@ -39,10 +40,10 @@ from redovisningai.connectors.fortnox import FortnoxApp
 from redovisningai.db import models as m
 from redovisningai.db import repo
 from redovisningai.facts.model import FactStore
-from redovisningai.jobs.pipeline import ImportError_, import_sie
+from redovisningai.jobs.pipeline import ImportError_, import_file
 from redovisningai.review.analysis import PAYROLL, CompanyAnalysis, voucher_view
 from redovisningai.review.finding_priorities import rank_findings
-from redovisningai.sie.parser import parse_sie
+from redovisningai.standard.loader import load_source
 
 router = APIRouter(prefix="/api/companies/{company_id}", tags=["kund"])
 
@@ -78,9 +79,10 @@ def _mask_payroll(obj: Any, principal: Principal) -> Any:
 async def upload(
     company_id: uuid.UUID, file: UploadFile = File(...), principal: Principal = Depends(require_write)
 ) -> dict[str, Any]:
+    """Ladda upp bokföring: SIE (typ 1–4), CSV/Excel-export av verifikationer eller standardformat (JSON)."""
     raw = await file.read()
     try:
-        res = import_sie(principal.ctx, company_id, file.filename or "fil.se", raw, ai=_ai(principal))
+        res = import_file(principal.ctx, company_id, file.filename or "fil.se", raw, ai=_ai(principal))
     except ImportError_ as exc:
         raise HTTPException(422, str(exc)) from exc
     invalidate_cache(company_id)
@@ -88,6 +90,8 @@ async def upload(
         "source_file_id": str(res.source_file_id) if res.source_file_id else None,
         "imports": [str(i) for i in res.import_ids],
         "duplicate": res.skipped_duplicate,
+        "format": res.format,
+        "columns": res.columns,
         "stats": res.stats,
         "issues": res.issues,
         "reviewed_periods": res.reviewed_periods,
@@ -121,6 +125,7 @@ def list_imports(company_id: uuid.UUID, s: Session = Depends(db)) -> list[dict[s
                 "sha256": sf.sha256,
                 "size": sf.size_bytes,
                 "encoding": sf.encoding,
+                "format": sf.detected_format,
                 "issues": sf.parse_issues,
             },
         }
@@ -135,7 +140,7 @@ bulk_router = APIRouter(prefix="/api", tags=["kund"])
 async def bulk_upload(
     file: UploadFile = File(...), principal: Principal = Depends(require_write), s: Session = Depends(db)
 ) -> dict[str, Any]:
-    """Zip med många SIE-filer: varje fil kopplas till kund via organisationsnumret i filen."""
+    """Zip med många bokföringsfiler: varje fil kopplas till kund via organisationsnumret i filen."""
     raw = await file.read()
     try:
         zf = zipfile.ZipFile(io.BytesIO(raw))
@@ -150,23 +155,23 @@ async def bulk_upload(
             continue
         content = zf.read(info)
         try:
-            doc = parse_sie(content)
+            loaded = load_source(content, info.filename)
         except Exception as exc:
             results.append({"file": info.filename, "status": "error", "error": str(exc)})
             continue
-        cid = companies.get("".join(ch for ch in (doc.org_number or "") if ch.isdigit()))
+        cid = companies.get("".join(ch for ch in (loaded.ledger.org_number or "") if ch.isdigit()))
         if cid is None:
             results.append(
                 {
                     "file": info.filename,
                     "status": "no_match",
-                    "org_number": doc.org_number or "",
-                    "company_name": doc.company_name or "",
+                    "org_number": loaded.ledger.org_number or "",
+                    "company_name": loaded.ledger.company_name or "",
                 }
             )
             continue
         try:
-            res = import_sie(principal.ctx, cid, info.filename, content)
+            res = import_file(principal.ctx, cid, info.filename, content)
             invalidate_cache(cid)
             results.append(
                 {
@@ -290,15 +295,12 @@ def metric_comparisons(
     company_id: uuid.UUID,
     period: str,
     mode: Literal["yoy", "previous"] = "yoy",
+    compare: str | None = None,
     principal: Principal = Depends(get_principal),
 ) -> dict[str, Any]:
     """Lätt jämförelsesvar för samtliga mått utan verifikationsrader."""
     analysis = load_analysis(principal, company_id)
-    try:
-        current = _period(analysis, period)
-        pair = comparison_pair(current, mode, analysis.ledger, analysis.index)
-    except (ValueError, KeyError) as exc:
-        raise HTTPException(422, f"Ogiltig jämförelseperiod: {period}") from exc
+    pair = comparison_for(analysis, period, mode, compare)
     metrics: dict[str, dict[str, Any]] = {}
     for code in REGISTRY:
         explanation = explain_metric(
@@ -312,12 +314,26 @@ def metric_comparisons(
         item = explanation.to_dict()
         metrics[code] = {
             key: item[key]
-            for key in ("code", "label", "unit", "current", "previous", "change", "status", "warnings", "fact_ids")
+            for key in (
+                "code",
+                "label",
+                "unit",
+                "better",
+                "formula",
+                "current",
+                "previous",
+                "change",
+                "status",
+                "warnings",
+                "fact_ids",
+            )
         }
     return {
         "periods": {"current": pair.current.spec, "previous": pair.previous.spec},
+        "labels": {"current": pair.current.label, "previous": pair.previous.label},
         "status": pair.status.value,
         "warnings": list(pair.warnings),
+        "notices": list(pair.notices),
         "metrics": metrics,
     }
 
@@ -328,17 +344,14 @@ def metric_explanation(
     code: str,
     period: str,
     mode: Literal["yoy", "previous"] = "yoy",
+    compare: str | None = None,
     principal: Principal = Depends(get_principal),
 ) -> dict[str, Any]:
     """Detaljerat svar för ett mått, med begränsad evidens från båda perioderna."""
     if code not in REGISTRY:
         raise HTTPException(422, f"Okänt nyckeltal: {code}")
     analysis = load_analysis(principal, company_id)
-    try:
-        current = _period(analysis, period)
-        pair = comparison_pair(current, mode, analysis.ledger, analysis.index)
-    except (ValueError, KeyError) as exc:
-        raise HTTPException(422, f"Ogiltig jämförelseperiod: {period}") from exc
+    pair = comparison_for(analysis, period, mode, compare)
     explanation = explain_metric(
         code,
         analysis.index,
@@ -351,6 +364,38 @@ def metric_explanation(
     for component_data, component in zip(payload["components"], explanation.components, strict=True):
         component_data["evidence"] = evidence_for_component(analysis.index, component, pair, limit=8).to_dict()
     return _mask_payroll(payload, principal)  # type: ignore[no-any-return]
+
+
+@router.get("/metric-structure/{code}")
+def metric_structure_view(
+    company_id: uuid.UUID,
+    code: str,
+    end: str,
+    series: str = "months",
+    count: int | None = None,
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """Nyckeltalets uppbyggnad över en serie perioder, med konton och bryggor mellan perioderna."""
+    if code not in REGISTRY:
+        raise HTTPException(422, f"Okänt nyckeltal: {code}")
+    if series not in SERIES_KINDS:
+        raise HTTPException(422, f"Okänd serietyp: {series}")
+    analysis = load_analysis(principal, company_id)
+    try:
+        last = analysis.period(end)
+        periods = period_series(series, last.end, count or SERIES_KINDS[series][2], analysis.ledger)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    structure = metric_structure(
+        code,
+        analysis.index,
+        periods,
+        series=series,
+        mapping=analysis.ctx.statement_mapping,
+        rates=analysis.rates,
+        hidden_accounts=None if principal.can_payroll else PAYROLL,
+    )
+    return structure.to_dict()
 
 
 def _candidate_dict(candidate: FindingCandidate) -> dict[str, Any]:
@@ -388,15 +433,12 @@ def analysis_findings(
     company_id: uuid.UUID,
     period: str,
     mode: Literal["yoy", "previous"] = "yoy",
+    compare: str | None = None,
     principal: Principal = Depends(get_principal),
 ) -> dict[str, Any]:
     """Deterministiska analyskandidater; skiljda från sparade granskningsfynd."""
     analysis = load_analysis(principal, company_id)
-    try:
-        current = _period(analysis, period)
-        pair = comparison_pair(current, mode, analysis.ledger, analysis.index)
-    except (ValueError, KeyError) as exc:
-        raise HTTPException(422, f"Ogiltig jämförelseperiod: {period}") from exc
+    pair = comparison_for(analysis, period, mode, compare)
     explanations = [
         explain_metric(
             code,

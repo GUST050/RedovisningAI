@@ -66,6 +66,10 @@ class LedgerIndex:
     coverage: dict[date, str] = field(default_factory=dict)
     vouchers_by_month: dict[date, list[Voucher]] = field(default_factory=dict)
     accounts_used: set[int] = field(default_factory=set)
+    # Räkenskapsår som bara finns som årssaldon (#RES/#UB utan verifikationer eller #PSALDO):
+    # årets rörelse per konto. Hela året går att jämföra, enskilda månader inte.
+    annual: dict[date, dict[int, Decimal]] = field(default_factory=dict)
+    _openings: dict[date, dict[int, Decimal]] = field(default_factory=dict, repr=False)
 
     @classmethod
     def build(cls, ledger: Ledger) -> LedgerIndex:
@@ -76,47 +80,64 @@ class LedgerIndex:
             months = year.fiscal_year.months()
             if year.has_vouchers:
                 for m in months:
-                    idx.coverage[m] = "vouchers"
+                    idx.coverage[m] = "vouchers" if year.covers(m) else "none"
                 for v in year.vouchers:
                     m = month_start(v.date)
                     by_month[m].append(v)
                     for r in v.effective_rows:
                         mv[m][r.account] += r.amount
                         idx.accounts_used.add(r.account)
-            elif year.period_balances:
-                _fill_from_psaldo(year, mv, idx)
             else:
-                for m in months:
-                    idx.coverage.setdefault(m, "none")
+                if year.period_balances:
+                    _fill_from_psaldo(year, mv, idx)
+                else:
+                    for m in months:
+                        idx.coverage.setdefault(m, "none")
+                if year.result or year.closing:
+                    _fill_annual(year, idx)
         idx.movements = {m: dict(a) for m, a in mv.items()}
         idx.vouchers_by_month = dict(by_month)
         return idx
 
     # ------------------------------------------------------------------ frågor
+    def annual_year(self, period: Period) -> YearData | None:
+        """Året om perioden är ett helt räkenskapsår som bara finns som årssaldon (inte per månad)."""
+        year = self.ledger.year_for(period.start)
+        if year is None or year.fiscal_year.start not in self.annual:
+            return None
+        if period.start != year.fiscal_year.start or period.end != year.fiscal_year.end:
+            return None
+        if all(self.coverage.get(m) in ("vouchers", "psaldo") for m in period.months()):
+            return None  # månaderna finns – använd dem
+        return year
+
     def has_data(self, period: Period) -> bool:
+        if self.annual_year(period) is not None:
+            return True
         return all(self.coverage.get(m) in ("vouchers", "psaldo") for m in period.months())
 
     def missing_months(self, period: Period) -> list[date]:
+        if self.annual_year(period) is not None:
+            return []
         return [m for m in period.months() if self.coverage.get(m) not in ("vouchers", "psaldo")]
 
-    def movement(self, accounts: AccountSet | Iterable[int] | int, period: Period) -> Decimal:
-        total = ZERO
-        for m in period.months():
-            month_mv = self.movements.get(m)
-            if not month_mv:
-                continue
-            for acc, amt in month_mv.items():
-                if _matches(acc, accounts):
-                    total += amt
-        return total
-
-    def movement_by_account(self, accounts: AccountSet, period: Period) -> dict[int, Decimal]:
+    def period_movements(self, period: Period) -> dict[int, Decimal]:
+        """Rörelse per konto för perioden (månadernas summa, eller årssaldon för ett sammandragsår)."""
+        year = self.annual_year(period)
+        if year is not None:
+            return dict(self.annual[year.fiscal_year.start])
         out: dict[int, Decimal] = defaultdict(lambda: ZERO)
         for m in period.months():
             for acc, amt in self.movements.get(m, {}).items():
-                if acc in accounts:
-                    out[acc] += amt
-        return {a: v for a, v in out.items() if v != 0}
+                out[acc] += amt
+        return dict(out)
+
+    def movement(self, accounts: AccountSet | Iterable[int] | int, period: Period) -> Decimal:
+        wanted = accounts if isinstance(accounts, AccountSet | int) else set(accounts)
+        return sum((amt for acc, amt in self.period_movements(period).items() if _matches(acc, wanted)), ZERO)
+
+    def movement_by_account(self, accounts: AccountSet, period: Period) -> dict[int, Decimal]:
+        return {a: v for a, v in self.period_movements(period).items() if a in accounts and v != 0}
 
     def monthly_series(self, accounts: AccountSet | Iterable[int] | int, months: Sequence[date]) -> list[Decimal]:
         return [
@@ -128,24 +149,90 @@ class LedgerIndex:
         return self.ledger.year_for(d)
 
     def opening_balance(self, year: YearData, account: int) -> Decimal:
-        if account in year.opening:
-            return year.opening[account]
+        return self.opening_balances(year).get(account, ZERO)
+
+    def opening_balances(self, year: YearData) -> dict[int, Decimal]:
+        """Ingående balans per konto.
+
+        Källans IB används i första hand. Saknas den tas föregående års UB enligt källan, och
+        saknas även den härleds UB ur föregående års IB och verifikationer (med ett ej
+        bokslutsfört resultat fört till 2099). Härledning görs bara när föregående år är komplett.
+        """
+        key = year.fiscal_year.start
+        cached = self._openings.get(key)
+        if cached is None:
+            cached = self._resolve_opening(year)
+            self._openings[key] = cached
+        return cached
+
+    def _resolve_opening(self, year: YearData) -> dict[int, Decimal]:
+        if year.opening:
+            return dict(year.opening)
+        prev = self._adjacent_previous(year)
+        if prev is None:
+            return {}
+        if prev.closing:
+            # UB enligt källan. Är föregående års resultat inte bokslutsfört balanserar UB inte;
+            # då förs resultatet till eget kapital (2099) så att årets IB balanserar.
+            derived_ub = {a: v for a, v in prev.closing.items() if a < 3000}
+            imbalance = sum(derived_ub.values(), ZERO)
+            if imbalance:
+                derived_ub[2099] = derived_ub.get(2099, ZERO) - imbalance
+            return {a: v for a, v in derived_ub.items() if v != 0}
+        if not self._complete_voucher_year(prev):
+            return {}
+        end = prev.fiscal_year.end
+        derived = dict(self.balances_at(end))
+        unclosed = self.result_to_date(end, include_closing_entries=True)
+        if unclosed:
+            derived[2099] = derived.get(2099, ZERO) - unclosed
+        return {a: v for a, v in derived.items() if v != 0}
+
+    def _adjacent_previous(self, year: YearData) -> YearData | None:
         prev = self.ledger.previous_year(year)
-        if prev is not None and not year.opening and account in prev.closing:
-            return prev.closing[account]
-        return ZERO
+        if prev is None or prev.fiscal_year.end + timedelta(days=1) != year.fiscal_year.start:
+            return None
+        return prev
+
+    def _complete_voucher_year(self, year: YearData) -> bool:
+        return year.has_vouchers and all(year.covers(m) for m in year.fiscal_year.months()) and self.opening_known(year)
+
+    def opening_known(self, year: YearData) -> bool:
+        """Är årets ingående balanser kända (ur källan eller härledda ur föregående år)?"""
+        if year.opening or year.opening_status != "missing":
+            return True
+        prev = self._adjacent_previous(year)
+        if prev is None:
+            return False
+        return bool(prev.closing) or self._complete_voucher_year(prev)
+
+    def _annual_closing(self, year: YearData, at: date) -> bool:
+        """Årsskiftet i ett sammandragsår: saldona är kända direkt ur källans UB."""
+        return at == year.fiscal_year.end and year.fiscal_year.start in self.annual and bool(year.closing)
+
+    def balance_complete(self, at: date) -> bool:
+        """Kan balansposterna vid dagens slut beräknas? Kräver känd IB och alla månader till dagen."""
+        year = self.ledger.year_for(at)
+        if year is not None and self._annual_closing(year, at):
+            return True
+        if year is None or not self.opening_known(year):
+            return False
+        return all(self.coverage.get(m) in ("vouchers", "psaldo") for m in months_between(year.fiscal_year.start, at))
 
     def balance_at(self, accounts: AccountSet | Iterable[int] | int, at: date) -> Decimal:
         """Saldo för balanskonton vid dagens slut (IB + rörelser t.o.m. dagen)."""
         year = self.ledger.year_for(at)
         if year is None:
             return ZERO
+        if self._annual_closing(year, at):
+            return sum((v for a, v in year.closing.items() if a < 3000 and _matches(a, accounts)), ZERO)
         total = ZERO
-        accs: set[int] = set(year.opening) | self.accounts_used | set(self.ledger.accounts)
+        opening = self.opening_balances(year)
+        accs: set[int] = set(opening) | self.accounts_used | set(self.ledger.accounts)
         for acc in accs:
             if acc >= 3000 or not _matches(acc, accounts):
                 continue
-            total += self.opening_balance(year, acc)
+            total += opening.get(acc, ZERO)
         cur_month = month_start(at)
         if cur_month > year.fiscal_year.start:
             for m in months_between(year.fiscal_year.start, add_months(cur_month, -1)):
@@ -168,12 +255,15 @@ class LedgerIndex:
         year = self.ledger.year_for(at)
         if year is None:
             return {}
+        if self._annual_closing(year, at):
+            return {
+                a: v for a, v in year.closing.items() if a < 3000 and v != 0 and (accounts is None or a in accounts)
+            }
         out: dict[int, Decimal] = defaultdict(lambda: ZERO)
-        for acc in set(year.opening) | set(self.ledger.accounts) | self.accounts_used:
-            if acc < 3000 and (accounts is None or acc in accounts):
-                ob = self.opening_balance(year, acc)
-                if ob:
-                    out[acc] += ob
+        opening = self.opening_balances(year)
+        for acc, ob in opening.items():
+            if acc < 3000 and ob and (accounts is None or acc in accounts):
+                out[acc] += ob
         cur_month = month_start(at)
         if cur_month > year.fiscal_year.start:
             for m in months_between(year.fiscal_year.start, add_months(cur_month, -1)):
@@ -207,6 +297,17 @@ class LedgerIndex:
         if year is None:
             return {}
         upper = 8999 if include_closing_entries else 8989
+        if at == year.fiscal_year.end and year.fiscal_year.start in self.annual and year.closing:
+            annual = {a: -v for a, v in year.result.items() if 3000 <= a <= upper and v != 0}
+            if include_closing_entries:
+                # UB är avgörande: det ej bokslutsförda resultatet är obalansen i UB. Saknar #RES
+                # bokslutsposten (8999) för ett bokslutsfört år läggs den till här, så att
+                # resultatet inte räknas två gånger i eget kapital.
+                unclosed = sum((v for a, v in year.closing.items() if a < 3000), ZERO)
+                gap = unclosed - sum(annual.values(), ZERO)
+                if gap:
+                    annual[8999] = annual.get(8999, ZERO) + gap
+            return {a: v for a, v in annual.items() if v != 0}
         amounts: dict[int, Decimal] = defaultdict(lambda: ZERO)
         for m in months_between(year.fiscal_year.start, at):
             month_mv = self.movements.get(m, {})
@@ -236,6 +337,14 @@ class LedgerIndex:
         months = [m for m, c in self.coverage.items() if c == "vouchers" and m in self.vouchers_by_month]
         return max(months) if months else None
 
+    def data_horizon(self) -> date | None:
+        """Sista dagen i den senaste månaden med bokförda verifikationer (eller periodsaldon)."""
+        latest = self.latest_month_with_data()
+        if latest is None:
+            psaldo = [m for m, c in self.coverage.items() if c == "psaldo"]
+            latest = max(psaldo) if psaldo else None
+        return None if latest is None else add_months(latest, 1) - timedelta(days=1)
+
     def months_with_data(self) -> list[date]:
         return sorted(m for m, c in self.coverage.items() if c in ("vouchers", "psaldo"))
 
@@ -260,6 +369,23 @@ def _matches(acc: int, accounts: AccountSet | Iterable[int] | int) -> bool:
     if isinstance(accounts, AccountSet):
         return acc in accounts
     return acc in set(accounts)
+
+
+def _fill_annual(year: YearData, idx: LedgerIndex) -> None:
+    """#RES/#UB för ett år utan verifikationer: årets rörelse per konto (resultatkonton alltid,
+    balanskonton bara när IB finns så att rörelsen blir UB − IB)."""
+    totals = {a: v for a, v in year.result.items() if a >= 3000}
+    if year.opening:
+        for acc in set(year.closing) | set(year.opening):
+            if acc < 3000:
+                diff = year.closing.get(acc, ZERO) - year.opening.get(acc, ZERO)
+                if diff:
+                    totals[acc] = diff
+    idx.annual[year.fiscal_year.start] = {a: v for a, v in totals.items() if v != 0}
+    idx.accounts_used.update(idx.annual[year.fiscal_year.start])
+    for m in year.fiscal_year.months():
+        if idx.coverage.get(m) in (None, "none"):
+            idx.coverage[m] = "annual"
 
 
 def _fill_from_psaldo(year: YearData, mv: dict[date, dict[int, Decimal]], idx: LedgerIndex) -> None:

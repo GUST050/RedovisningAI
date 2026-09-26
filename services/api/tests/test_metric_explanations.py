@@ -277,3 +277,87 @@ def test_commentary_can_use_explicit_month_pair_and_fingerprint_is_pair_bound() 
     assert analysis.source_fingerprint(
         current, previous, prompt_version=A3_PROMPT_VERSION
     ) == analysis.source_fingerprint(current, previous, prompt_version=A3_PROMPT_VERSION)
+
+
+def test_custom_comparison_pair_accepts_any_period_of_same_shape() -> None:
+    index = LedgerIndex.build(generate(DEMO_PROFILES[0], date(2026, 9, 30)).ledger)
+
+    pair = comparison_pair(month(2026, 9), "custom", index.ledger, index, month(2026, 3))
+    assert (pair.current.spec, pair.previous.spec, pair.status) == ("2026-09", "2026-03", FactStatus.CALCULATED)
+
+    shape = comparison_pair(month(2026, 9), "custom", index.ledger, index, rolling(date(2026, 9, 30), 12))
+    assert shape.status is FactStatus.INSUFFICIENT_DATA
+    assert "inte direkt jämförbara" in " ".join(shape.warnings)
+
+    import pytest
+
+    with pytest.raises(ValueError):
+        comparison_pair(month(2026, 9), "custom", index.ledger, index, month(2026, 9))
+    with pytest.raises(ValueError):
+        comparison_pair(month(2026, 9), "custom", index.ledger, index)
+
+
+def test_new_metrics_follow_their_formulas() -> None:
+    index = LedgerIndex.build(generate(DEMO_PROFILES[0], date(2026, 9, 30)).ledger)
+    period = month(2026, 9)
+    from redovisningai.accounting.statements import income_statement
+
+    income = income_statement(index, period)
+    balance = balance_sheet(index, period.end)
+    value = {code: calculate_metric(code, index, period).value for code in REGISTRY}
+    assert value["gross_profit"] == income.line("net_sales").amount + income.line("materials").amount
+    assert value["ebitda"] == income.line("operating_result").amount - income.line("depreciation").amount
+    assert value["working_capital"] == (
+        balance.line("current_assets").amount - balance.line("current_liabilities").amount
+    )
+    expected_share = (-income.line("other_external").amount / income.line("net_sales").amount * 100).quantize(
+        Decimal("0.1")
+    )
+    assert value["external_cost_share"] == expected_share
+    assert REGISTRY["external_cost_share"].better == "lower"
+    assert REGISTRY["receivables"].better == "neutral"
+
+
+def test_full_year_comparison_works_with_summary_year_from_single_sie_file() -> None:
+    from redovisningai.accounting.periods import parse_period
+    from redovisningai.sie.writer import write_sie4
+
+    generated = generate(DEMO_PROFILES[1], date(2026, 9, 30)).ledger
+    year_2025 = next(y for y in generated.years if y.fiscal_year.start == date(2025, 1, 1))
+    doc = parse_sie(write_sie4(generated, year_2025))
+    single = LedgerIndex.build(ledger_from_documents([(doc, "2025.se")]))
+    full = LedgerIndex.build(generated)
+    fy_2024 = parse_period("FY:2024-01", single.ledger)
+    pair = comparison_pair(parse_period("FY:2025-01", single.ledger), "yoy", single.ledger, single)
+
+    assert pair.previous.spec == "FY:2024-01"
+    assert pair.status is FactStatus.CALCULATED
+    for code in REGISTRY:
+        assert calculate_metric(code, single, fy_2024).value == calculate_metric(code, full, fy_2024).value, code
+    explanation = explain_metric(
+        "operating_margin", single, pair, mapping=StatementMapping(), rates=default_rates(), store=FactStore()
+    )
+    assert explanation.status is FactStatus.CALCULATED
+    assert sum((c.effect for c in explanation.components), Decimal(0)) == explanation.change
+    # Enskilda månader i sammandragsåret är inte kända.
+    assert calculate_metric("net_sales", single, month(2024, 5)).status is FactStatus.INSUFFICIENT_DATA
+    component = next(c for c in explanation.components if c.code == "net_sales")
+    assert evidence_for_component(single, component, pair).source_level == "account_voucher"
+
+
+def test_closed_summary_year_is_not_double_counted() -> None:
+    """Fortnox-SIE: föregående år är bokslutsfört (resultatet ligger i #UB 2099) men #RES saknar 8999."""
+    from pathlib import Path
+
+    from redovisningai.accounting.periods import parse_period
+
+    raw = (Path(__file__).parent / "fixtures" / "fortnox_like.se").read_bytes()
+    index = LedgerIndex.build(ledger_from_documents([(parse_sie(raw), "fortnox_like.se")]))
+    fy_2025 = parse_period("FY:2025-01", index.ledger)
+    sheet = balance_sheet(index, fy_2025.end)
+
+    assert sheet.line("total_assets").amount == sheet.line("total_equity_liabilities").amount == Decimal("52000.00")
+    assert calculate_metric("equity_ratio", index, fy_2025).value == Decimal("100.0")
+    assert calculate_metric("operating_result", index, fy_2025).value == Decimal("12000.00")
+    # Nästa års härledda IB bygger på samma UB.
+    assert index.opening_balances(index.ledger.years[-1])[2099] == Decimal("-27000.00")

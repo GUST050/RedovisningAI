@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import csv
 import io
+import unicodedata
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
@@ -15,8 +17,11 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from redovisningai.accounting.periods import same_period_previous_year
+from redovisningai.accounting.structure import SERIES_KINDS
+from redovisningai.analytics.differences import DifferenceSet, collect_differences
 from redovisningai.api.deps import (
     Principal,
+    comparison_for,
     db,
     get_company,
     get_principal,
@@ -30,8 +35,9 @@ from redovisningai.db import repo
 from redovisningai.db.session import TenantContext, anonymous_session, tenant_session
 from redovisningai.findings.lifecycle import precision_by_rule
 from redovisningai.reports.builders import client_report, internal_report, reko_documentation, statements_tables
+from redovisningai.reports.comparison_report import ReportSelectionError, SelectedItem, build_comparison_report
 from redovisningai.reports.document import Table, to_docx, to_pdf, to_xlsx
-from redovisningai.review.analysis import CompanyAnalysis
+from redovisningai.review.analysis import PAYROLL, CompanyAnalysis
 from redovisningai.review.workflow import (
     ALLOWED_ATTACHMENT_TYPES,
     MAX_ATTACHMENT_BYTES,
@@ -42,6 +48,7 @@ from redovisningai.review.workflow import (
 )
 from redovisningai.rules.engine import default_catalog
 from redovisningai.rules.rates import default_rates
+from redovisningai.standard.format import dumps
 
 # ============================================================================ publik svarssida
 
@@ -106,6 +113,7 @@ async def public_answer(
 
 reports = APIRouter(prefix="/api/companies/{company_id}", tags=["rapporter"])
 
+REPORT_VERSION = "comparison-report-v1"
 MEDIA = {
     "pdf": "application/pdf",
     "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -113,10 +121,18 @@ MEDIA = {
 }
 
 
-def _file(data: bytes, fmt: str, name: str) -> Response:
-    return Response(
-        data, media_type=MEDIA[fmt], headers={"Content-Disposition": f'attachment; filename="{name}.{fmt}"'}
+def content_disposition(filename: str) -> str:
+    """Nedladdningshuvud som klarar å, ä och ö (RFC 6266/5987) med ASCII-reserv för äldre klienter."""
+    fallback = "".join(
+        ch if ch.isascii() and (ch.isalnum() or ch in " .-_&()+,") else "_"
+        for ch in unicodedata.normalize("NFKD", filename)
+        if not unicodedata.combining(ch)
     )
+    return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(filename, safe='')}"
+
+
+def _file(data: bytes, fmt: str, name: str) -> Response:
+    return Response(data, media_type=MEDIA[fmt], headers={"Content-Disposition": content_disposition(f"{name}.{fmt}")})
 
 
 def _analysis_metadata_current(analysis: CompanyAnalysis, metadata: dict[str, Any] | None) -> bool:
@@ -245,6 +261,148 @@ def report_reko(
     )
     repo.audit(s, principal.ctx, "report.reko_exported", company_id, period=period)
     return _file(to_pdf(doc), "pdf", f"{company.name} {period} granskningsdokumentation")
+
+
+class ReportItemIn(BaseModel):
+    id: str = Field(min_length=1, max_length=200)
+    comment: str | None = Field(default=None, max_length=2000)
+    series: str | None = Field(default=None, max_length=20)
+    count: int | None = Field(default=None, ge=2, le=36)
+
+
+class ComparisonReportIn(BaseModel):
+    period: str = Field(max_length=40)
+    mode: Literal["yoy", "previous"] = "yoy"
+    compare: str | None = Field(default=None, max_length=40)
+    audience: Literal["internal", "client"] = "internal"
+    format: Literal["pdf", "docx", "xlsx"] = "pdf"
+    title: str | None = Field(default=None, max_length=200)
+    intro: str | None = Field(default=None, max_length=4000)
+    include_key_figures: bool = True
+    items: list[ReportItemIn] = Field(min_length=1, max_length=30)
+
+
+def _differences(a: CompanyAnalysis, pair: Any, principal: Principal, audience: str) -> DifferenceSet:
+    return collect_differences(
+        a.index,
+        pair,
+        mapping=a.ctx.statement_mapping,
+        categories=a.ctx.category_mapping,
+        rates=a.rates,
+        aliases=a.ctx.aliases,
+        hidden_accounts=None if principal.can_payroll and audience == "internal" else PAYROLL,
+        include_findings=audience == "internal",
+    )
+
+
+@reports.get("/report-items")
+def report_items(
+    company_id: uuid.UUID,
+    period: str,
+    mode: Literal["yoy", "previous"] = "yoy",
+    compare: str | None = None,
+    audience: Literal["internal", "client"] = "internal",
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """Alla jämförelser för periodparet, rangordnade, med de viktigaste föreslagna för rapporten."""
+    a = load_analysis(principal, company_id)
+    pair = comparison_for(a, period, mode, compare)
+    ds = _differences(a, pair, principal, audience)
+    return {
+        "periods": {"current": pair.current.spec, "previous": pair.previous.spec},
+        "labels": {"current": pair.current.label, "previous": pair.previous.label},
+        "status": pair.status.value,
+        "warnings": list(pair.warnings),
+        "notices": list(pair.notices),
+        "audience": audience,
+        "items": [i.to_dict() for i in ds.items],
+        "recommended": [i.id for i in ds.recommended()],
+        "versions": ds.versions,
+        "series": [
+            {"kind": kind, "label": label, "max": maximum, "default": default}
+            for kind, (label, maximum, default) in SERIES_KINDS.items()
+        ],
+    }
+
+
+@reports.post("/reports/comparison")
+def report_comparison(
+    company_id: uuid.UUID,
+    body: ComparisonReportIn,
+    principal: Principal = Depends(get_principal),
+    s: Session = Depends(db),
+) -> Response:
+    """Rapport av valda skillnader och jämförelser (PDF, Word eller Excel) för intern eller kund."""
+    company = get_company(s, company_id)
+    a = load_analysis(principal, company_id)
+    pair = comparison_for(a, body.period, body.mode, body.compare)
+    ds = _differences(a, pair, principal, body.audience)
+    try:
+        doc, sheets = build_comparison_report(
+            a.index,
+            pair,
+            ds,
+            [SelectedItem(i.id, i.comment, i.series, i.count) for i in body.items],
+            company_name=company.name,
+            org_number=company.org_number,
+            audience=body.audience,
+            mapping=a.ctx.statement_mapping,
+            rates=a.rates,
+            firm_name=principal.org_name,
+            prepared_by=principal.name,
+            title=body.title,
+            intro=body.intro,
+            hidden_accounts=None if principal.can_payroll else PAYROLL,
+            include_key_figures=body.include_key_figures,
+            source_fingerprint=a.source_fingerprint(pair.current, pair.previous, prompt_version=REPORT_VERSION),
+        )
+    except ReportSelectionError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    repo.audit(
+        s,
+        principal.ctx,
+        "report.comparison_exported",
+        company_id,
+        period=pair.current.spec,
+        compare=pair.previous.spec,
+        audience=body.audience,
+        format=body.format,
+        items=[i.id for i in body.items],
+    )
+    data = to_pdf(doc) if body.format == "pdf" else to_docx(doc) if body.format == "docx" else to_xlsx(sheets)
+    kind = "kundrapport" if body.audience == "client" else "intern"
+    return _file(data, body.format, f"{company.name} {pair.current.spec} jämförelse {kind}")
+
+
+@reports.get("/export/ledger.json")
+def export_standard(
+    company_id: uuid.UUID, principal: Principal = Depends(get_principal), s: Session = Depends(db)
+) -> Response:
+    """Bolagets bokföring i RedovisningAI:s standardformat (samma data som analysen bygger på).
+
+    Filen innehåller alla verifikationsrader, även lönerader, och kräver därför behörigheten Lönedata.
+    """
+    if not principal.can_payroll:
+        raise HTTPException(403, "Exporten innehåller lönerader och kräver behörigheten Lönedata.")
+    company = get_company(s, company_id)
+    a = load_analysis(principal, company_id)
+    runs = repo.latest_imports(s, company_id)
+    file_ids = {r.source_file_id for r in runs.values() if r.source_file_id}
+    files = (
+        [
+            {"name": f.filename, "sha256": f.sha256, "format": f.detected_format, "encoding": f.encoding}
+            for f in s.scalars(select(m.SourceFile).where(m.SourceFile.id.in_(file_ids))).all()
+        ]
+        if file_ids
+        else []
+    )
+    body = dumps(a.ledger, source={"system": company.source_system, "program": a.ledger.program, "files": files})
+    repo.audit(s, principal.ctx, "export.standard_ledger", company_id)
+    return Response(
+        body.encode(),
+        media_type="application/json",
+        headers={"Content-Disposition": content_disposition(f"{company.name} bokföring standardformat.json")},
+    )
 
 
 @reports.get("/export/{what}.xlsx")

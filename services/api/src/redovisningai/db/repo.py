@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from collections import defaultdict
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -170,12 +171,63 @@ def persist_document(
     source_file_id: uuid.UUID | None,
 ) -> ImportOutcome:
     """Spara en tolkad SIE-fil. Verifikationer versioneras: bara nya/ändrade sparas."""
+    return persist_ledger(
+        session,
+        ctx,
+        company_id,
+        doc.accounts.values(),
+        document_years(doc),
+        source=source,
+        source_file_id=source_file_id,
+        parser_version=PARSER_VERSION,
+        source_format=f"SIE{doc.sie_type or ''}",
+    )
+
+
+def _previous_run(session: Session, fy_id: uuid.UUID) -> m.ImportRun | None:
+    return session.scalar(
+        select(m.ImportRun)
+        .where(m.ImportRun.fiscal_year_id == fy_id, m.ImportRun.status == "COMPLETE")
+        .order_by(m.ImportRun.seq.desc())
+        .limit(1)
+    )
+
+
+def _covered_months(stats: dict[str, Any] | None) -> frozenset[date] | None:
+    raw = (stats or {}).get("covered_months")
+    if raw is None:
+        return None
+    return frozenset(date(int(x[:4]), int(x[5:7]), 1) for x in raw)
+
+
+def persist_ledger(
+    session: Session,
+    ctx: TenantContext,
+    company_id: uuid.UUID,
+    accounts: Iterable[Account],
+    years: Iterable[YearData],
+    *,
+    source: str,
+    source_file_id: uuid.UUID | None,
+    parser_version: str,
+    replaces: str = "fiscal_year",
+    ranges: Mapping[date, tuple[date, date]] | None = None,
+    source_format: str | None = None,
+) -> ImportOutcome:
+    """Spara normaliserad bokföring (standardmodellen). Verifikationer versioneras: bara nya/ändrade sparas.
+
+    `replaces="fiscal_year"` (SIE, standardformat): filen innehåller hela räkenskapsår och
+    verifikationer som saknas i filen räknas som borttagna. `replaces="date_range"` (CSV/Excel
+    för del av år): filen gäller bara sitt datumintervall. Verifikationer utanför intervallet och
+    tidigare ingående balanser och budget behålls.
+    """
     outcome = ImportOutcome([], [], 0, 0, 0, 0, set())
+    partial = replaces == "date_range"
     # Konton (senaste namn vinner)
     existing_accounts = {
         a.number: a for a in session.scalars(select(m.Account).where(m.Account.company_id == company_id)).all()
     }
-    for acc in doc.accounts.values():
+    for acc in accounts:
         row = existing_accounts.get(acc.number)
         if row is None:
             session.add(
@@ -191,7 +243,7 @@ def persist_document(
         elif acc.name != f"Konto {acc.number}":
             row.name, row.type, row.sru = acc.name, (acc.type.value if acc.type else row.type), acc.sru or row.sru
 
-    for yd in document_years(doc):
+    for yd in years:
         fy_row = _fiscal_year(session, ctx, company_id, yd.fiscal_year)
         if not yd.has_vouchers:
             # Sammandragsår: spara bara om det saknas import med verifikationer för året.
@@ -206,6 +258,7 @@ def persist_document(
             )
             if has_full:
                 continue
+        previous_run = _previous_run(session, fy_row.id) if partial else None
         seq = _next_seq(session, company_id)
         run = m.ImportRun(
             org_id=ctx.org_id,
@@ -215,7 +268,7 @@ def persist_document(
             source=source,
             seq=seq,
             status="PENDING",
-            parser_version=PARSER_VERSION,
+            parser_version=parser_version,
             has_vouchers=yd.has_vouchers,
             created_by=ctx.user_id,
         )
@@ -223,7 +276,8 @@ def persist_document(
         session.flush()
         outcome.import_ids.append(run.id)
         outcome.fiscal_years.append((yd.fiscal_year.start, yd.fiscal_year.end))
-        stats = {"vouchers": len(yd.vouchers), "added": 0, "changed": 0, "removed": 0, "unchanged": 0}
+        stats: dict[str, Any] = {"vouchers": len(yd.vouchers), "added": 0, "changed": 0, "removed": 0, "unchanged": 0}
+        lo, hi = (ranges or {}).get(yd.fiscal_year.start, (yd.fiscal_year.start, yd.fiscal_year.end))
         if yd.has_vouchers:
             current = {
                 (v.series, v.number): v
@@ -268,10 +322,14 @@ def persist_document(
                 )
                 new_versions.append((vv, v))
             for key, cur in current.items():
-                if key not in incoming:
-                    cur.valid_to = seq
-                    stats["removed"] += 1
-                    outcome.affected_months.add(month_start(cur.date))
+                if key in incoming:
+                    continue
+                if partial and not (lo <= cur.date <= hi):
+                    stats["kept"] = stats.get("kept", 0) + 1
+                    continue
+                cur.valid_to = seq
+                stats["removed"] += 1
+                outcome.affected_months.add(month_start(cur.date))
             session.add_all([vv for vv, _ in new_versions])
             session.flush()
             session.add_all(
@@ -294,7 +352,40 @@ def persist_document(
                     for i, r in enumerate(v.rows)
                 ]
             )
-        for kind, values in (("IB", yd.opening), ("UB", yd.closing), ("RES", yd.result)):
+        opening: dict[int, Decimal] = dict(yd.opening)
+        opening_status = yd.opening_status
+        budget: dict[tuple[date, int], Decimal] = dict(yd.budget)
+        covered = yd.covered_months
+        closing, result, period_balances = yd.closing, yd.result, yd.period_balances
+        if partial:
+            # En del-årsexport ändrar bara verifikationer. IB och budget från tidigare import
+            # behålls; UB/RES räknas om från verifikationerna i stället för att bli inaktuella.
+            closing, result, period_balances = {}, {}, {}
+            prev_stats = previous_run.stats if previous_run is not None else {}
+            if previous_run is not None:
+                if not opening and yd.opening_status == "missing":
+                    for b in session.scalars(
+                        select(m.YearBalance).where(
+                            m.YearBalance.import_id == previous_run.id, m.YearBalance.kind == "IB"
+                        )
+                    ).all():
+                        opening[b.account] = b.amount
+                    opening_status = str(prev_stats.get("opening_status", "known"))
+                if not budget:
+                    for pa in session.scalars(
+                        select(m.PeriodAmount).where(
+                            m.PeriodAmount.import_id == previous_run.id, m.PeriodAmount.kind == "PBUDGET"
+                        )
+                    ).all():
+                        budget[(pa.period, pa.account)] = pa.amount
+                previous_covered = _covered_months(prev_stats) if previous_run.has_vouchers else frozenset()
+                covered = None if previous_covered is None else previous_covered | (covered or frozenset())
+        stats["opening_status"] = opening_status
+        if covered is not None:
+            stats["covered_months"] = sorted(f"{mo:%Y-%m}" for mo in covered)
+        if source_format:
+            stats["source_format"] = source_format
+        for kind, values in (("IB", opening), ("UB", closing), ("RES", result)):
             session.add_all(
                 [
                     m.YearBalance(
@@ -303,7 +394,7 @@ def persist_document(
                     for a, x in values.items()
                 ]
             )
-        for kind, values2 in (("PSALDO", yd.period_balances), ("PBUDGET", yd.budget)):
+        for kind, values2 in (("PSALDO", period_balances), ("PBUDGET", budget)):
             session.add_all(
                 [
                     m.PeriodAmount(
@@ -311,11 +402,11 @@ def persist_document(
                         company_id=company_id,
                         import_id=run.id,
                         kind=kind,
-                        period=p,
+                        period=pd,
                         account=a,
                         amount=x,
                     )
-                    for (p, a), x in values2.items()
+                    for (pd, a), x in values2.items()
                 ]
             )
         session.flush()
@@ -407,7 +498,11 @@ def load_ledger(
         fy = fys[fy_id]
         seqs[str(fy_id)] = run.seq
         yd = YearData(
-            fiscal_year=FiscalYear(fy.start_date, fy.end_date), source_ref=str(run.id), has_vouchers=run.has_vouchers
+            fiscal_year=FiscalYear(fy.start_date, fy.end_date),
+            source_ref=str(run.id),
+            has_vouchers=run.has_vouchers,
+            opening_status=str((run.stats or {}).get("opening_status", "known")),
+            covered_months=_covered_months(run.stats),
         )
         for b in session.scalars(select(m.YearBalance).where(m.YearBalance.import_id == run.id)).all():
             {"IB": yd.opening, "UB": yd.closing, "RES": yd.result}[b.kind][b.account] = b.amount

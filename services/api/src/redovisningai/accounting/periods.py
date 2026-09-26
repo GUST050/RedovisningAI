@@ -80,6 +80,25 @@ class Period:
         return months_between(self.start, self.end)
 
 
+def short_label(p: Period) -> str:
+    """Kort periodnamn för tabellrubriker: "sep 2026", "Q3 2026", "2026", "2025/26", "jan–sep 2026"."""
+    s, e = p.start, p.end
+    match p.kind:
+        case PeriodKind.MONTH:
+            return f"{MONTHS_SV[e.month - 1]} {e.year}"
+        case PeriodKind.QUARTER:
+            return f"Q{(e.month - 1) // 3 + 1} {e.year}"
+        case PeriodKind.FISCAL_YEAR:
+            return str(s.year) if (s.month, s.day) == (1, 1) and s.year == e.year else f"{s.year}/{str(e.year)[2:]}"
+        case PeriodKind.YTD | PeriodKind.CUSTOM:
+            if s.year == e.year:
+                return f"{MONTHS_SV[s.month - 1]}–{MONTHS_SV[e.month - 1]} {e.year}"
+            return f"{MONTHS_SV[s.month - 1]} {s.year}–{MONTHS_SV[e.month - 1]} {e.year}"
+        case PeriodKind.ROLLING:
+            return f"R{p.months_count} {MONTHS_SV[e.month - 1]} {e.year}"
+    return p.label
+
+
 def month(y: int, m: int) -> Period:
     s = date(y, m, 1)
     return Period(s, month_end(s), PeriodKind.MONTH, f"{MONTHS_SV[m - 1]} {y}")

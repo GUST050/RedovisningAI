@@ -37,11 +37,17 @@ class MetricComponent:
     previous_accounts: dict[int, Decimal] = field(default_factory=dict)
     fact_id: str | None = None
     note: str | None = None
+    role: str = "component"  # component | numerator (täljare) | denominator (nämnare)
+
+    @property
+    def display_label(self) -> str:
+        return f"{self.label} (nämnare)" if self.role == "denominator" else self.label
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "code": self.code,
             "label": self.label,
+            "role": self.role,
             "current": str(self.current),
             "previous": str(self.previous),
             "effect": str(self.effect),
@@ -74,11 +80,21 @@ class MetricExplanation:
     versions: dict[str, str]
     fact_ids: tuple[str, ...] = ()
 
+    @property
+    def better(self) -> str:
+        return REGISTRY[self.code].better
+
+    @property
+    def formula(self) -> str:
+        return REGISTRY[self.code].formula
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "code": self.code,
             "label": self.label,
             "unit": self.unit.value,
+            "better": self.better,
+            "formula": self.formula,
             "current": None if self.current is None else str(self.current),
             "previous": None if self.previous is None else str(self.previous),
             "change": None if self.change is None else str(self.change),
@@ -137,6 +153,10 @@ def _line_component(
 def _income_components(code: str) -> tuple[str, ...]:
     if code == "net_sales":
         return ("net_sales",)
+    if code == "gross_profit":
+        return ("net_sales", "materials")
+    if code == "ebitda":
+        return tuple(line for line in _income_components("operating_result") if line != "depreciation")
     if code == "operating_result":
         return (
             "net_sales",
@@ -181,6 +201,44 @@ def _balance_component(index: LedgerIndex, code: str, period: Period, previous: 
         current_accounts=current_accounts,
         previous_accounts=previous_accounts,
     )
+
+
+WORKING_CAPITAL_LINES = (
+    ("inventory", 1),
+    ("receivables", 1),
+    ("short_investments", 1),
+    ("cash", 1),
+    ("current_liabilities", -1),
+)
+
+
+def _working_capital_components(
+    index: LedgerIndex, pair: ComparisonPair, mapping: StatementMapping
+) -> list[MetricComponent]:
+    """Rörelsekapital = omsättningstillgångar − kortfristiga skulder, rad för rad."""
+    current = balance_sheet(index, pair.current.end, mapping=mapping)
+    previous = balance_sheet(index, pair.previous.end, mapping=mapping)
+    out: list[MetricComponent] = []
+    for code, sign in WORKING_CAPITAL_LINES:
+        now, before = current.line(code), previous.line(code)
+        if now.amount == 0 and before.amount == 0 and not now.accounts and not before.accounts:
+            continue
+        factor = Decimal(sign)
+        out.append(
+            MetricComponent(
+                code=code,
+                label=now.label,
+                current=now.amount * factor,
+                previous=before.amount * factor,
+                effect=(now.amount - before.amount) * factor,
+                unit=Unit.SEK,
+                source_level="account",
+                current_accounts={a: v * factor for a, v in now.accounts.items()},
+                previous_accounts={a: v * factor for a, v in before.accounts.items()},
+                note="Ökade kortfristiga skulder minskar rörelsekapitalet." if sign < 0 else None,
+            )
+        )
+    return out
 
 
 def _balance_accounts(index: LedgerIndex, statement: Statement, code: str, at: Any) -> dict[int, Decimal]:
@@ -301,11 +359,12 @@ def _ratio_parts(
                 False,
             )
         ]
-    elif code == "personnel_share":
-        cl, pl = current_income.line("personnel"), previous_income.line("personnel")
+    elif code in ("personnel_share", "external_cost_share"):
+        line_code = "personnel" if code == "personnel_share" else "other_external"
+        cl, pl = current_income.line(line_code), previous_income.line(line_code)
         num_lines = [
             (
-                "personnel",
+                line_code,
                 cl.label,
                 -cl.amount,
                 -pl.amount,
@@ -447,7 +506,7 @@ def explain_metric(
     definition = REGISTRY[code]
     current_fact = calculate_metric(code, index, pair.current, store=store, mapping=mapping, rates=rates)
     previous_fact = calculate_metric(code, index, pair.previous, store=store, mapping=mapping, rates=rates)
-    warnings = list(pair.warnings)
+    warnings = [*pair.warnings, *pair.notices]
     if pair.status not in (FactStatus.CALCULATED, FactStatus.PARTIAL):
         return MetricExplanation(
             code,
@@ -485,6 +544,8 @@ def explain_metric(
     if definition.unit is Unit.SEK:
         if code in ("cash", "receivables", "payables"):
             components.append(_balance_component(index, code, pair.current, pair.previous))
+        elif code == "working_capital":
+            components.extend(_working_capital_components(index, pair, mapping))
         else:
             cur_statement = income_statement(index, pair.current, mapping=mapping)
             prev_statement = income_statement(index, pair.previous, mapping=mapping)
@@ -550,6 +611,7 @@ def explain_metric(
                         now_accounts,
                         before_accounts,
                         note=note,
+                        role="numerator" if is_numerator else "denominator",
                     )
                 )
             change = sum((component.effect for component in components), ZERO)
@@ -575,3 +637,85 @@ def explain_metric(
         {"metric": definition.version, "mapping": mapping.version},
         (current_fact.id, previous_fact.id),
     )
+
+
+@dataclass(frozen=True, slots=True)
+class MetricPart:
+    """En byggsten i ett nyckeltal för en enskild period (t.ex. personalkostnader i rörelsemarginalen)."""
+
+    code: str
+    label: str
+    value: Decimal
+    role: str  # "component" (del av summan), "numerator" (täljare) eller "denominator" (nämnare)
+    accounts: dict[int, Decimal] = field(default_factory=dict)
+    note: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MetricParts:
+    parts: tuple[MetricPart, ...]
+    base: Decimal | None  # värdet som andelarna räknas mot (t.ex. nettoomsättning)
+    base_label: str | None
+
+
+def metric_parts(
+    code: str,
+    index: LedgerIndex,
+    period: Period,
+    *,
+    mapping: StatementMapping,
+    rates: RateTable,
+) -> MetricParts:
+    """Nyckeltalets uppbyggnad för en period, med samma rader och tecken som förändringsbryggan.
+
+    Summor (kr) byggs av sina resultat- eller balansrader; kvoter av täljarens rader och nämnaren.
+    Andelarna (del / bas × 100) visar t.ex. varje kostnadsslag i procent av omsättningen, så att
+    rörelsemarginalens uppbyggnad kan jämföras mellan perioder.
+    """
+    if code not in REGISTRY:
+        raise KeyError(f"Okänt nyckeltal: {code}")
+    definition = REGISTRY[code]
+    self_pair = ComparisonPair(period, period, FactStatus.CALCULATED)
+    if definition.unit is Unit.SEK:
+        if code in ("cash", "receivables", "payables"):
+            component = _balance_component(index, code, period, period)
+            total_assets = balance_sheet(index, period.end, mapping=mapping).line("total_assets").amount
+            part = MetricPart(
+                component.code, component.label, component.current, "component", component.current_accounts
+            )
+            return MetricParts((part,), total_assets, "totala tillgångar")
+        if code == "working_capital":
+            total_assets = balance_sheet(index, period.end, mapping=mapping).line("total_assets").amount
+            parts = tuple(
+                MetricPart(c.code, c.label, c.current, "component", c.current_accounts, c.note)
+                for c in _working_capital_components(index, self_pair, mapping)
+            )
+            return MetricParts(parts, total_assets, "totala tillgångar")
+        statement = income_statement(index, period, mapping=mapping)
+        parts = tuple(
+            MetricPart(
+                line,
+                statement.line(line).label,
+                statement.line(line).amount,
+                "component",
+                statement.line(line).accounts,
+            )
+            for line in _income_components(code)
+        )
+        return MetricParts(parts, statement.line("net_sales").amount, "nettoomsättningen")
+    income = income_statement(index, period, mapping=mapping)
+    balance = balance_sheet(index, period.end, mapping=mapping)
+    _n0, _d0, _n1, d1, raw = _ratio_parts(code, index, period, period, income, income, balance, balance, rates)
+    parts_list: list[MetricPart] = []
+    base_label: str | None = None
+    for part_code, label, now, _before, accounts, _prev_accounts, note, is_numerator in raw:
+        if not is_numerator:
+            base_label = label.lower()
+        if part_code == "corporate_tax":
+            continue  # parameterändring finns bara mellan perioder, inte inom en period
+        if part_code == "untaxed_reserves":
+            label = "Obeskattade reserver efter skatt"
+        parts_list.append(
+            MetricPart(part_code, label, now, "numerator" if is_numerator else "denominator", accounts, note)
+        )
+    return MetricParts(tuple(parts_list), d1, base_label)

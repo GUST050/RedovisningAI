@@ -198,6 +198,7 @@ class Statement:
     mapping_version: str
     complete: bool = True
     missing_months: list[date] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
 
     def line(self, code: str) -> StatementLine:
         return next(ln for ln in self.lines if ln.code == code)
@@ -210,20 +211,20 @@ class Statement:
             "mapping_version": self.mapping_version,
             "complete": self.complete,
             "missing_months": [m.isoformat() for m in self.missing_months],
+            "notes": list(self.notes),
             "lines": [ln.to_dict(names) for ln in self.lines],
         }
 
 
 def _income_amounts(index: LedgerIndex, period: Period, mapping: StatementMapping) -> dict[str, dict[int, Decimal]]:
     out: dict[str, dict[int, Decimal]] = {ln.code: {} for ln in INCOME_LINES}
-    for m in period.months():
-        for acc, amt in index.movements.get(m, {}).items():
-            if acc < 3000 or acc >= 8990:
-                continue
-            code = mapping.line_for(acc)
-            if code is None:
-                continue
-            out[code][acc] = out[code].get(acc, ZERO) - amt  # presentation: kredit positiv
+    for acc, amt in index.period_movements(period).items():
+        if acc < 3000 or acc >= 8990:
+            continue
+        code = mapping.line_for(acc)
+        if code is None:
+            continue
+        out[code][acc] = out[code].get(acc, ZERO) - amt  # presentation: kredit positiv
     return out
 
 
@@ -302,10 +303,15 @@ def balance_sheet(
         if camount is not None:
             ctotals[ln.code] = camount
         lines.append(StatementLine(ln.code, ln.label, ln.level, amount, camount, accs, caccs))
+    complete = index.balance_complete(at) and (compare_at is None or index.balance_complete(compare_at))
     return Statement(
         kind="balance",
         period_label=f"Per {at.isoformat()}",
         compare_label=f"Per {compare_at.isoformat()}" if compare_at else None,
         lines=lines,
         mapping_version=mapping.version,
+        complete=complete,
+        notes=[]
+        if complete
+        else ["Ingående balanser eller månader i räkenskapsåret saknas – saldona visar inte hela bilden."],
     )

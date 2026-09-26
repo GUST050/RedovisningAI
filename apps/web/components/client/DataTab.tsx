@@ -16,13 +16,15 @@ type ImportRun = {
   fiscal_year: { start: string; end: string };
   stats: { added?: number; changed?: number; removed?: number; vouchers?: number };
   created_at: string;
-  file: { name: string; sha256: string; size: number; encoding: string; issues: { code: string; line: number | null; message: string; severity: string }[] } | null;
+  file: { name: string; sha256: string; size: number; encoding: string; format: string | null; issues: { code: string; line: number | null; message: string; severity: string }[] } | null;
 };
 
 type Connection = { id: string; source: string; status: string; last_success_at: string | null; last_error: string | null; authorized_at: string | null };
 
 type UploadResult = {
   duplicate: boolean;
+  format: string | null;
+  columns: string | null;
   stats: Record<string, number>;
   issues: { message: string; severity: string }[];
   reviewed_periods: string[];
@@ -37,7 +39,16 @@ type TaxRec = {
   unmatched_book: { date: string; text: string; amount: string; voucher?: string }[];
 };
 
-const SOURCE_SV: Record<string, string> = { sie_file: "SIE-fil", fortnox: "Fortnox", spiris: "Spiris" };
+const SOURCE_SV: Record<string, string> = {
+  sie_file: "SIE-fil",
+  csv_file: "CSV-fil",
+  excel_file: "Excelfil",
+  standard_file: "Standardformat",
+  fortnox: "Fortnox",
+  spiris: "Spiris",
+};
+
+const FORMAT_SV: Record<string, string> = { CSV: "CSV", XLSX: "Excel", "RAI-JSON": "standardformat (JSON)" };
 
 export function DataTab({ base, company, onImported }: { base: string; company: Company; onImported: () => void }) {
   const me = useMe();
@@ -57,7 +68,17 @@ export function DataTab({ base, company, onImported }: { base: string; company: 
         />
       )}
       <ConnectionsCard base={base} conns={conns.data} error={conns.error} write={write} onChanged={() => { conns.reload(); imports.reload(); onImported(); }} />
-      <Card title="Importer" className="xl:col-span-2">
+      <Card
+        title="Importer"
+        className="xl:col-span-2"
+        actions={
+          me?.permissions.payroll && imports.data && imports.data.length > 0 ? (
+            <a href={`${base}/export/ledger.json`} className="rounded-md border border-line bg-white px-3 py-1 text-[12px] hover:bg-canvas" title="Hela bokföringen i RedovisningAI:s standardformat (JSON), samma data som analysen bygger på">
+              Exportera standardformat
+            </a>
+          ) : undefined
+        }
+      >
         <ErrorBox error={imports.error} />
         {!imports.data ? (
           <Loading />
@@ -87,7 +108,7 @@ export function DataTab({ base, company, onImported }: { base: string; company: 
                     {r.file ? (
                       <>
                         {r.file.name}
-                        <div className="text-muted">{Math.ceil(r.file.size / 1024)} kB · {r.file.encoding} · <span className="font-mono" title={r.file.sha256}>{r.file.sha256.slice(0, 10)}…</span></div>
+                        <div className="text-muted">{r.file.format ? `${FORMAT_SV[r.file.format] ?? r.file.format} · ` : ""}{Math.ceil(r.file.size / 1024)} kB · {r.file.encoding} · <span className="font-mono" title={r.file.sha256}>{r.file.sha256.slice(0, 10)}…</span></div>
                       </>
                     ) : "–"}
                   </td>
@@ -98,7 +119,7 @@ export function DataTab({ base, company, onImported }: { base: string; company: 
                         <summary className="cursor-pointer">{r.file.issues.length} st</summary>
                         <ul>
                           {r.file.issues.slice(0, 20).map((i, k) => (
-                            <li key={k} className={i.severity === "ERROR" ? "text-high" : ""}>{i.line ? `Rad ${i.line}: ` : ""}{i.message}</li>
+                            <li key={k} className={i.severity.toLowerCase() === "error" ? "text-high" : i.severity.toLowerCase() === "warning" ? "text-medium" : ""}>{i.line ? `Rad ${i.line}: ` : ""}{i.message}</li>
                           ))}
                         </ul>
                       </details>
@@ -136,7 +157,7 @@ function SieUpload({ base, onDone }: { base: string; onDone: () => void }) {
       .finally(() => setBusy(false));
   };
   return (
-    <Card title="Ladda upp SIE4-fil">
+    <Card title="Ladda upp bokföring">
       <div
         className="rounded-md border-2 border-dashed border-line p-6 text-center"
         onDragOver={(e) => e.preventDefault()}
@@ -146,14 +167,14 @@ function SieUpload({ base, onDone }: { base: string; onDone: () => void }) {
           if (f) upload(f);
         }}
       >
-        <p className="mb-2 text-muted">Dra hit en SIE4-fil (.se/.si) eller</p>
+        <p className="mb-2 text-muted">Dra hit en SIE-fil, en verifikationslista eller huvudbok som CSV/Excel (t.ex. export från Fortnox) eller en fil i standardformat – eller</p>
         <Button variant="secondary" disabled={busy} onClick={() => input.current?.click()}>{busy ? "Importerar och granskar…" : "Välj fil"}</Button>
-        <input ref={input} type="file" accept=".se,.si,.sie,.txt" className="hidden" onChange={(e) => {
+        <input ref={input} type="file" accept=".se,.si,.sie,.txt,.csv,.xlsx,.json" className="hidden" onChange={(e) => {
           const file = e.target.files?.[0];
           e.target.value = "";
           if (file) upload(file);
         }} />
-        <p className="mt-2 text-[11px] text-muted">Filen krypteras och sparas som underlag. Samma fil två gånger importeras inte igen.</p>
+        <p className="mt-2 text-[11px] text-muted">Allt översätts till samma standardformat innan analysen. Filen krypteras och sparas som underlag. Samma fil två gånger importeras inte igen.</p>
       </div>
       <div className="mt-3 space-y-2">
         <ErrorBox error={err} />
@@ -163,16 +184,17 @@ function SieUpload({ base, onDone }: { base: string; onDone: () => void }) {
               <p>Filen är redan importerad – inget ändrades.</p>
             ) : (
               <>
-                <p className="font-medium text-ok">Importen är klar.</p>
+                <p className="font-medium text-ok">Importen är klar{result.format ? ` (${FORMAT_SV[result.format] ?? result.format})` : ""}.</p>
+                {result.columns && <p className="text-[12px] text-muted">Kolumner: {result.columns}</p>}
                 <p>
                   {result.stats.vouchers ?? 0} verifikationer ({result.stats.added ?? 0} nya, {result.stats.changed ?? 0} ändrade, {result.stats.removed ?? 0} borttagna).
                   {result.reviewed_periods.length > 0 && ` Granskade perioder: ${result.reviewed_periods.join(", ")}.`}
                 </p>
               </>
             )}
-            {result.issues.length > 0 && (
+            {result.issues.some((i) => i.severity !== "info") && (
               <ul className="mt-1 list-disc pl-4 text-[12px] text-medium">
-                {result.issues.slice(0, 8).map((i, k) => <li key={k}>{i.message}</li>)}
+                {result.issues.filter((i) => i.severity !== "info").slice(0, 8).map((i, k) => <li key={k}>{i.message}</li>)}
               </ul>
             )}
           </div>
@@ -314,7 +336,7 @@ function BulkUpload() {
   const STATUS: Record<string, string> = { imported: "Importerad", duplicate: "Redan importerad", no_match: "Ingen kund med orgnr", error: "Fel" };
   return (
     <Card title="Många kunder på en gång (zip)">
-      <p className="mb-2 text-[13px] text-muted">Zip-fil med SIE4-filer. Varje fil kopplas till rätt kund via organisationsnumret i filen.</p>
+      <p className="mb-2 text-[13px] text-muted">Zip-fil med SIE-filer (eller andra bokföringsfiler som anger organisationsnummer). Varje fil kopplas till rätt kund via organisationsnumret i filen.</p>
       <Button variant="secondary" disabled={busy} onClick={() => input.current?.click()}>{busy ? "Importerar…" : "Välj zip-fil"}</Button>
       <input
         ref={input}
