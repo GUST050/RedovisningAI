@@ -14,6 +14,7 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
+from functools import partial
 from typing import Any
 
 from sqlalchemy import select
@@ -21,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from redovisningai.accounting.periods import month, month_start
 from redovisningai.ai.service import AIService
+from redovisningai.ai.tasks import A3_PROMPT_VERSION
 from redovisningai.cases.builder import Case
 from redovisningai.config import get_settings
 from redovisningai.db import models as m
@@ -30,11 +32,14 @@ from redovisningai.facts.model import Visibility
 from redovisningai.findings.lifecycle import reconcile
 from redovisningai.maturity.assess import PeriodStatus
 from redovisningai.review.analysis import CompanyAnalysis
+from redovisningai.review.commentary import InvalidComparison, build_commentary
 from redovisningai.rules.engine import FindingCandidate, Severity, default_catalog
 from redovisningai.sie.parser import SieFormatError, parse_sie
 from redovisningai.storage.objects import EncryptedStore, ObjectStore, get_object_store
 
 log = logging.getLogger(__name__)
+
+AUTO_COMMENTARY_BY = "automatisk analys"
 MAX_FILE_BYTES = 200 * 1024 * 1024
 STEP_VERSION = "1"
 
@@ -254,7 +259,62 @@ def review_company(
                 records = records + res.created
         repo.save_findings(s, ctx, company_id, records)
         repo.audit(s, ctx, "review.completed", company_id, periods=todo)
-        return todo
+    if todo and ai is not None and ai.enabled:
+        _auto_commentary(ctx, company_id, analysis, records, todo, ai)
+    return todo
+
+
+def _period_review(s: Session, company_id: uuid.UUID, period: str) -> m.PeriodReview | None:
+    return s.scalar(
+        select(m.PeriodReview).where(m.PeriodReview.company_id == company_id, m.PeriodReview.period == period)
+    )
+
+
+def _auto_commentary(
+    ctx: TenantContext,
+    company_id: uuid.UUID,
+    analysis: CompanyAnalysis,
+    records: list[Any],
+    reviewed: list[str],
+    ai: AIService,
+) -> None:
+    """A3 efter granskningen (plan §9.8): analys av senaste granskade månaden när inget aktuellt utkast finns.
+
+    Körs utanför granskningens transaktion. Bara riktig AI-text sparas (en regelbaserad reservtext skulle
+    annars se aktuell ut och låsa perioden), och ett modellfel loggas men stoppar aldrig import eller granskning.
+    """
+    period = max(reviewed, key=lambda spec: analysis.period(spec).end)
+    try:
+        with tenant_session(ctx) as s:
+            pr = _period_review(s, company_id, period)
+            metadata = (pr.commentary or {}).get("analysis_metadata") if pr is not None else None
+        if pr is None or analysis.draft_is_current(metadata, prompt_version=A3_PROMPT_VERSION):
+            return
+        review = analysis.review(analysis.period(period), records)
+        run = partial(build_commentary, analysis, review, ai=ai, org_id=str(ctx.org_id), company_id=str(company_id))
+        try:  # behåll ett tidigare sparat periodpar (t.ex. konsultens val av föregående månad)
+            result = run(compare_spec=metadata.get("compare_period") if metadata else None)
+        except InvalidComparison:
+            result = run(compare_spec=None)
+        if result["source"] != "ai":
+            log.info("Ingen AI-text för %s %s; inget automatiskt utkast sparas", company_id, period)
+            return
+        with tenant_session(ctx) as s:
+            pr = _period_review(s, company_id, period)
+            if pr is None:
+                return
+            pr.commentary = {**result, "created_at": datetime.now().isoformat(), "by": AUTO_COMMENTARY_BY}
+            repo.audit(
+                s,
+                ctx,
+                "ai.commentary.auto",
+                company_id,
+                period=period,
+                source=result["source"],
+                trace_id=result["trace_id"],
+            )
+    except Exception:
+        log.exception("Automatisk AI-analys misslyckades för %s %s", company_id, period)
 
 
 def _detect_changes_after_approval(
