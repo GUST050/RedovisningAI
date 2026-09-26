@@ -19,6 +19,13 @@ from redovisningai.db.session import TenantContext, tenant_session
 log = logging.getLogger(__name__)
 
 
+def _models(s: Settings, configured: dict[ModelTier, str]) -> dict[ModelTier, str]:
+    """Testläget kör alla nivåer på den billiga testmodellen när en sådan är vald."""
+    if s.ai_test_mode and s.ai_test_model:
+        return {tier: s.ai_test_model for tier in ModelTier}
+    return configured
+
+
 def _provider(platform: str, region: str | None, s: Settings) -> ModelProvider:
     if platform == "fake":
         return FakeProvider()
@@ -27,11 +34,14 @@ def _provider(platform: str, region: str | None, s: Settings) -> ModelProvider:
             OpenAIConfig(
                 api_key=s.openai_api_key,
                 base_url=s.openai_base_url,
-                models={
-                    ModelTier.STRONG: s.openai_model_strong,
-                    ModelTier.MEDIUM: s.openai_model_medium,
-                    ModelTier.SMALL: s.openai_model_small,
-                },
+                models=_models(
+                    s,
+                    {
+                        ModelTier.STRONG: s.openai_model_strong,
+                        ModelTier.MEDIUM: s.openai_model_medium,
+                        ModelTier.SMALL: s.openai_model_small,
+                    },
+                ),
             )
         )
     if platform not in {"bedrock", "vertex", "anthropic"}:
@@ -40,11 +50,14 @@ def _provider(platform: str, region: str | None, s: Settings) -> ModelProvider:
         platform=platform,
         region=region,
         project_id=s.ai_project_id,
-        models={
-            ModelTier.STRONG: s.ai_model_strong,
-            ModelTier.MEDIUM: s.ai_model_medium,
-            ModelTier.SMALL: s.ai_model_small,
-        },
+        models=_models(
+            s,
+            {
+                ModelTier.STRONG: s.ai_model_strong,
+                ModelTier.MEDIUM: s.ai_model_medium,
+                ModelTier.SMALL: s.ai_model_small,
+            },
+        ),
         refusal_fallback_model=None if s.ai_test_mode else s.ai_refusal_fallback_model,
         max_retries=0 if s.ai_test_mode else 2,
     )

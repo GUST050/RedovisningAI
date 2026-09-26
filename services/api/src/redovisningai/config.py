@@ -63,6 +63,8 @@ class Settings(BaseSettings):
     openai_model_small: str = "gpt-6-luna"
     # Testläge är standard även med aktiverad AI: lågt tak, ingen automatisk reservleverantör.
     ai_test_mode: bool = True
+    # Billig modell för alla nivåer medan testläget är på (t.ex. gpt-6-luna); tomt = de vanliga modellerna.
+    ai_test_model: str | None = None
     ai_test_monthly_token_cap: int = Field(default=20_000, ge=1)
     ai_test_max_output_tokens: int = Field(default=1_500, ge=1)
     ai_test_max_tool_calls: int = Field(default=3, ge=0)

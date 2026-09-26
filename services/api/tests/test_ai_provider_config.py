@@ -6,9 +6,11 @@ import uuid
 from contextlib import contextmanager
 from types import SimpleNamespace
 
+import pytest
+
 from redovisningai.ai import factory
 from redovisningai.ai.factory import build_provider
-from redovisningai.ai.providers.base import FailoverProvider, ProviderError
+from redovisningai.ai.providers.base import FailoverProvider, ModelTier, ProviderError
 from redovisningai.config import Settings
 
 
@@ -76,6 +78,37 @@ def test_test_mode_disables_claude_retries_and_refusal_fallback(monkeypatch) -> 
     provider = build_provider(Settings(ai_enabled=True, ai_platform="anthropic", ai_test_mode=True))
     assert provider is not None and provider.config.max_retries == 0
     assert provider.config.refusal_fallback_model is None
+
+
+@pytest.mark.parametrize(("platform", "key"), [("openai", "OPENAI_API_KEY"), ("anthropic", "ANTHROPIC_API_KEY")])
+def test_test_mode_runs_every_tier_on_the_cheap_test_model(monkeypatch, platform: str, key: str) -> None:  # type: ignore[no-untyped-def]
+    _stub_optional_adapters(monkeypatch)
+    monkeypatch.setenv(key, "test-only")
+    settings = Settings(
+        ai_enabled=True,
+        ai_platform=platform,
+        ai_test_mode=True,
+        ai_test_model="cheap-test-model",
+        openai_model_strong="expensive-openai",
+        ai_model_strong="expensive-claude",
+    )
+    provider = build_provider(settings)
+    assert provider is not None
+    assert {provider.config.models[tier] for tier in ModelTier} == {"cheap-test-model"}
+
+
+def test_full_mode_ignores_the_test_model(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    _stub_optional_adapters(monkeypatch)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-only")
+    settings = Settings(
+        ai_enabled=True,
+        ai_platform="openai",
+        ai_test_mode=False,
+        ai_test_model="cheap-test-model",
+        openai_model_strong="expensive-openai",
+    )
+    provider = build_provider(settings)
+    assert provider is not None and provider.config.models[ModelTier.STRONG] == "expensive-openai"
 
 
 def test_missing_key_or_unknown_provider_fails_closed(monkeypatch) -> None:  # type: ignore[no-untyped-def]
