@@ -67,6 +67,11 @@ def test_ai_failure_is_logged_and_does_not_stop_the_import(database: str, caplog
                 raise RuntimeError("modellen föll")
             return super().structured(**kwargs)
 
+        def run_tools(self, **kwargs: Any) -> Any:  # A3 använder läsverktyg
+            if kwargs["task"] == "A3":
+                raise RuntimeError("modellen föll")
+            return super().run_tools(**kwargs)
+
     with caplog.at_level(logging.ERROR, logger="redovisningai.jobs.pipeline"):
         result = import_sie(admin, company, "minimal.se", minimal_sie_with_missing_rent(), ai=AIService(Broken()))
 
@@ -121,6 +126,9 @@ def test_background_step_logs_a_broken_model_and_keeps_going(database: str, capl
 
     class Broken(FakeProvider):
         def structured(self, **kwargs: Any) -> Any:
+            raise RuntimeError("modellen föll")
+
+        def run_tools(self, **kwargs: Any) -> Any:
             raise RuntimeError("modellen föll")
 
     with caplog.at_level(logging.ERROR, logger="redovisningai.jobs.pipeline"):

@@ -13,12 +13,16 @@ from redovisningai.accounting.comparisons import validate_comparison
 from redovisningai.accounting.metric_explanations import explain_metric
 from redovisningai.accounting.metrics import REGISTRY
 from redovisningai.accounting.periods import Period
+from redovisningai.ai.providers.base import ToolBudget
 from redovisningai.ai.service import AIService
 from redovisningai.ai.tasks import A3_PROMPT_VERSION, period_commentary_input
+from redovisningai.ai.tools import commentary_tools
 from redovisningai.analytics.finding_candidates import collect_candidates
 from redovisningai.facts.model import CALC_VERSION, FactStatus, Unit, Visibility
 from redovisningai.review.analysis import CompanyAnalysis, ReviewResult
 from redovisningai.review.finding_priorities import rank_findings
+
+A3_TOOL_BUDGET = ToolBudget(max_tool_calls=2, max_iterations=2)  # oftast räcker ett nyckeltal
 
 
 class InvalidComparison(ValueError):
@@ -139,6 +143,8 @@ def build_commentary(
         "task": "A3",
     }
     ai_package = period_commentary_input(package)
+    # Kontonummer från läsverktyget är identifierare; verifikationsnummer är det inte (A3:s gräns).
+    allowed = a3_allowed_identifiers(ai_package) | {str(account) for account in analysis.ledger.accounts}
     out = ai.run(
         "A3",
         ai_package,
@@ -147,7 +153,9 @@ def build_commentary(
         company_id=company_id,
         # The provider sees only the projected aggregates. Claim verification
         # is limited to facts included in that exact package.
-        allowed_identifiers=a3_allowed_identifiers(ai_package),
+        allowed_identifiers=allowed,
+        tools=commentary_tools(analysis, review.store, current),
+        tool_budget=A3_TOOL_BUDGET,
     )
     metadata["provider"] = out.trace.provider
     metadata["model"] = out.trace.model

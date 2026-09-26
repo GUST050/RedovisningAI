@@ -32,6 +32,41 @@ def _fact_out(f: Fact) -> dict[str, Any]:
     return {"fact_id": f.id, "label": f.label, "display": f.to_dict()["display"], "status": f.status.value}
 
 
+def _metric_change_schema() -> dict[str, Any]:
+    return _schema(
+        {
+            "metric": {"type": "string", "enum": sorted(REGISTRY)},
+            "period": PERIOD_PROP,
+            "compare": {"type": "string", "description": "Jämförelseperiod, eller tom sträng"},
+        },
+        ["metric", "period", "compare"],
+    )
+
+
+def commentary_tools(analysis: CompanyAnalysis, store: FactStore, default_period: Period) -> list[ToolSpec]:
+    """A3:s läsverktyg (plan Task 8): nyckeltalsbryggan i minimalt format – koder, kontonummer och
+    fakta, aldrig etiketter, namn, fritext eller verifikationer (A3:s data-minimala gräns)."""
+
+    def explain(inp: dict[str, Any]) -> Any:
+        current = analysis.period(inp.get("period") or default_period.spec)
+        previous = (
+            analysis.period(inp["compare"])
+            if inp.get("compare")
+            else same_period_previous_year(current, analysis.ledger)
+        )
+        return metric_change_evidence(analysis, inp["metric"], current, previous, store, minimal=True)
+
+    return [
+        ToolSpec(
+            "explain_metric_change",
+            "Bidragen bakom ett nyckeltals förändring (resultatrader/kvotdelar) och största kontoförändringar "
+            "i båda perioderna, som fakta-id. Tom compare = samma period i fjol.",
+            _metric_change_schema(),
+            explain,
+        )
+    ]
+
+
 def analyst_tools(
     analysis: CompanyAnalysis,
     store: FactStore,
@@ -204,14 +239,7 @@ def analyst_tools(
             "explain_metric_change",
             "Varför ett nyckeltal ändrats: exakta bidrag per resultatrad eller kvotdel och de största "
             "kontoförändringarna i båda perioderna, som fakta-id. Tom compare = samma period i fjol.",
-            _schema(
-                {
-                    "metric": {"type": "string", "enum": sorted(REGISTRY)},
-                    "period": PERIOD_PROP,
-                    "compare": {"type": "string", "description": "Jämförelseperiod, eller tom sträng"},
-                },
-                ["metric", "period", "compare"],
-            ),
+            _metric_change_schema(),
             explain_metric_change,
         ),
         ToolSpec(

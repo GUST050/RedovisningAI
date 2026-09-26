@@ -231,6 +231,45 @@ def test_a3_allows_the_account_numbers_its_package_shows(analysis, review) -> No
     assert shown and shown <= a3_allowed_identifiers(projected)
 
 
+def _keys(obj: Any) -> set[str]:
+    if isinstance(obj, dict):
+        return set(obj) | {k for v in obj.values() for k in _keys(v)}
+    if isinstance(obj, list):
+        return {k for v in obj for k in _keys(v)}
+    return set()
+
+
+def test_a3_tool_shows_the_bridge_behind_a_metric_without_names_or_text(analysis, review) -> None:  # type: ignore[no-untyped-def]
+    # A3:s gräns: koder, kontonummer och fakta – inga etiketter, kontonamn, fritext eller verifikationer.
+    from redovisningai.ai.tools import commentary_tools
+
+    tools = {t.name: t for t in commentary_tools(analysis, review.store, review.period)}
+    assert set(tools) == {"explain_metric_change"}
+    out = tools["explain_metric_change"].handler({"metric": "operating_result", "period": "2026-09", "compare": ""})
+    assert out["components"]
+    assert not {"label", "name", "note", "vouchers", "text"} & _keys(out)
+    refs = [c["effect"] for c in out["components"]] + [a["change"] for c in out["components"] for a in c["accounts"]]
+    assert all(set(r) <= {"fact_id", "display", "status"} and r["fact_id"] in review.store for r in refs)
+
+
+def test_a3_can_use_its_bounded_tool_and_name_accounts(analysis, review) -> None:  # type: ignore[no-untyped-def]
+    from redovisningai.ai.providers.base import StructuredResult
+    from redovisningai.review.commentary import build_commentary
+
+    seen: dict[str, Any] = {}
+
+    class Recorder(FakeProvider):
+        def run_tools(self, **kwargs: Any) -> Any:
+            seen["tools"], seen["budget"] = [t.name for t in kwargs["tools"]], kwargs["budget"]
+            question = {"type": "QUESTION", "text": "Kan ni stämma av konto 1930 och konto 2440?", "fact_ids": []}
+            return StructuredResult({"claims": [question]}, Usage(1, 1), "fake", "m", None, [])
+
+    result = build_commentary(analysis, review, ai=AIService(Recorder()), org_id="o", company_id="c")
+
+    assert seen["tools"] == ["explain_metric_change"] and seen["budget"].max_tool_calls <= 2
+    assert [c["text"] for c in result["data"]["claims"]] == ["Kan ni stämma av konto 1930 och konto 2440?"]
+
+
 def test_a_year_right_before_a_fact_reference_is_not_a_typed_number() -> None:
     assert find_literal_numbers("Inga personalkostnader för sep 2026 {f:line_personnel_1}.", set()) == []
 
@@ -356,6 +395,10 @@ def test_service_test_limits_one_attempt_and_output_tokens(analysis, review) -> 
         def structured(self, **kwargs: Any) -> Any:
             seen.append(kwargs["max_tokens"])
             return super().structured(**kwargs)
+
+        def run_tools(self, **kwargs: Any) -> Any:  # A3 har läsverktyg; gränsen gäller även där
+            seen.append(kwargs["max_tokens"])
+            return super().run_tools(**kwargs)
 
     prov = CapturingProvider(
         {"A3": lambda _: {"claims": [{"type": "OBSERVATION", "text": "Omsättningen ökade 17 %.", "fact_ids": []}]}}

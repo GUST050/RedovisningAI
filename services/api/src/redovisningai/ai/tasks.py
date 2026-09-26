@@ -35,7 +35,7 @@ Regler som alltid gäller:
 
 # Bump these whenever the corresponding prompt/schema semantics change. The value
 # is persisted with generated drafts and participates in their staleness checks.
-A3_PROMPT_VERSION = "A3-v3"  # v3: skärpta regler för fakta-id och värden (BASE_RULES)
+A3_PROMPT_VERSION = "A3-v4"  # v4: läsverktyget explain_metric_change (minimalt format)
 A4_PROMPT_VERSION = "A4-v2"
 A3_FINDING_LABELS = {
     "recurring_cost_change": "förändring i återkommande kostnad",
@@ -408,6 +408,7 @@ class PeriodCommentary(AITask):
         code="A3",
         name="Periodanalytiker",
         tier=ModelTier.STRONG,
+        uses_tools=True,
         system=BASE_RULES
         + """
 
@@ -419,7 +420,10 @@ aldrig en slutsats från konto eller belopp ensamt. Hänvisa inte till motpart e
 eftersom analyspaketet saknar sådana identifierare. Sedan vad
 konsulten bör kontrollera. Ta hänsyn till periodmognaden – är perioden preliminär eller
 periodiseras kostnader bara vid bokslut ska du säga det och hänvisa till maturity.fact_id. Antalet
-öppna ärenden med hög allvarlighet har fakta-id open_cases.fact_id.""",
+öppna ärenden med hög allvarlighet har fakta-id open_cases.fact_id.
+Behöver du se vad som ligger bakom ett nyckeltals förändring: använd explain_metric_change (bidrag och
+största kontoförändringar i båda perioderna, som fakta-id). Hämta högst det som behövs – oftast ett
+nyckeltal – och beskriv bidragen som EXPLANATION med bidragets fakta-id.""",
         schema={
             "type": "object",
             "properties": {"claims": claims_schema(10)},

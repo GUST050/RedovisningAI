@@ -26,10 +26,11 @@ NOTE = (
 )
 
 
-def _ref(fact: Fact | None) -> dict[str, Any] | None:
+def _ref(fact: Fact | None, minimal: bool = False) -> dict[str, Any] | None:
     if fact is None:
         return None
-    return {"fact_id": fact.id, "label": fact.label, "display": fact.to_dict()["display"], "status": fact.status.value}
+    ref = {"fact_id": fact.id, "display": fact.to_dict()["display"], "status": fact.status.value}
+    return ref if minimal else {**ref, "label": fact.label}
 
 
 def _change_unit(unit: Unit) -> Unit:
@@ -37,7 +38,12 @@ def _change_unit(unit: Unit) -> Unit:
 
 
 def _accounts(
-    analysis: CompanyAnalysis, component: MetricComponent, current: Period, previous: Period, store: FactStore
+    analysis: CompanyAnalysis,
+    component: MetricComponent,
+    current: Period,
+    previous: Period,
+    store: FactStore,
+    minimal: bool = False,
 ) -> dict[str, Any]:
     """Största kontoförändringarna i komponenten; lönekonton och resten bara som summor."""
     deltas = {
@@ -64,32 +70,34 @@ def _accounts(
     accounts = []
     for account in shown:
         name = f"{account} {analysis.ledger.account_name(account)}".strip()
-        accounts.append(
-            {
-                "account": account,
-                "name": name,
-                "change": _ref(
-                    amount(f"account:{account}:change", f"Förändring {name}", deltas[account], current, previous)
-                ),
-                "current": _ref(
-                    amount(f"account:{account}", name, component.current_accounts.get(account, ZERO), current)
-                ),
-                "previous": _ref(
-                    amount(f"account:{account}", name, component.previous_accounts.get(account, ZERO), previous)
-                ),
-            }
-        )
+        entry = {
+            "account": account,
+            "change": _ref(
+                amount(f"account:{account}:change", f"Förändring {name}", deltas[account], current, previous), minimal
+            ),
+            "current": _ref(
+                amount(f"account:{account}", name, component.current_accounts.get(account, ZERO), current), minimal
+            ),
+            "previous": _ref(
+                amount(f"account:{account}", name, component.previous_accounts.get(account, ZERO), previous), minimal
+            ),
+        }
+        accounts.append(entry if minimal else {**entry, "name": name})
     other = sum((deltas[a] for a in rest), ZERO)
     return {
         "accounts": accounts,
         "other_accounts": {
             "count": len(rest),
-            "change": _ref(amount(f"{component.code}:other_accounts", "Övriga konton", other, current, previous)),
+            "change": _ref(
+                amount(f"{component.code}:other_accounts", "Övriga konton", other, current, previous), minimal
+            ),
         }
         if rest
         else None,
         "payroll_accounts": {
-            "change": _ref(amount(f"{component.code}:payroll", "Lönekonton (aggregerat)", payroll, current, previous))
+            "change": _ref(
+                amount(f"{component.code}:payroll", "Lönekonton (aggregerat)", payroll, current, previous), minimal
+            )
         }
         if has_payroll
         else None,
@@ -97,8 +105,16 @@ def _accounts(
 
 
 def metric_change_evidence(
-    analysis: CompanyAnalysis, code: str, current: Period, previous: Period, store: FactStore
+    analysis: CompanyAnalysis,
+    code: str,
+    current: Period,
+    previous: Period,
+    store: FactStore,
+    *,
+    minimal: bool = False,
 ) -> dict[str, Any]:
+    """Förklaringen som fakta. minimal=True ger A3:s gräns: koder, kontonummer och fakta utan
+    etiketter, kontonamn eller fritext (A3 får aldrig namn, verifikationer eller detaljerade etiketter)."""
     pair = validate_comparison(current, previous, analysis.index)
     explanation = explain_metric(
         code, analysis.index, pair, mapping=analysis.ctx.statement_mapping, rates=analysis.rates, store=store
@@ -106,17 +122,17 @@ def metric_change_evidence(
     current_fact, previous_fact = (store.get(fid) for fid in explanation.fact_ids[:2])
     out: dict[str, Any] = {
         "metric": code,
-        "label": explanation.label,
         "status": explanation.status.value,
         "periods": explanation.periods,
         "warnings": list(explanation.warnings),
-        "current": _ref(current_fact),
-        "previous": _ref(previous_fact),
+        "current": _ref(current_fact, minimal),
+        "previous": _ref(previous_fact, minimal),
         "change": None,
         "components": [],
         "other_components": None,
-        "note": NOTE,
     }
+    if not minimal:
+        out.update(label=explanation.label, note=NOTE)
     if explanation.change is None or explanation.status not in (FactStatus.CALCULATED, FactStatus.PARTIAL):
         return out
 
@@ -131,7 +147,8 @@ def metric_change_evidence(
             period=current.spec,
             compare_period=previous.spec,
             status=explanation.status,
-        )
+        ),
+        minimal,
     )
     ranked = sorted(explanation.components, key=lambda c: (-abs(c.effect), c.code))
     shown, rest = ranked[:MAX_COMPONENTS], ranked[MAX_COMPONENTS:]
@@ -147,16 +164,13 @@ def metric_change_evidence(
             lineage={"metric": code, "component": component.code, "source_level": component.source_level},
             extra=str(position),
         )
-        out["components"].append(
-            {
-                "code": component.code,
-                "label": component.label,
-                "effect": _ref(effect),
-                "source_level": component.source_level,
-                "note": component.note,
-                **_accounts(analysis, component, current, previous, store),
-            }
-        )
+        entry = {
+            "code": component.code,
+            "effect": _ref(effect, minimal),
+            "source_level": component.source_level,
+            **_accounts(analysis, component, current, previous, store, minimal),
+        }
+        out["components"].append(entry if minimal else {**entry, "label": component.label, "note": component.note})
     if rest:
         other = store.new(
             "variance_component",
@@ -168,5 +182,5 @@ def metric_change_evidence(
             compare_period=previous.spec,
             lineage={"metric": code, "components": [c.code for c in rest]},
         )
-        out["other_components"] = {"count": len(rest), "effect": _ref(other)}
+        out["other_components"] = {"count": len(rest), "effect": _ref(other, minimal)}
     return out
