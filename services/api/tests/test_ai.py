@@ -160,6 +160,9 @@ def test_ai_trace_redacts_payload_output_rejection_text_and_tool_arguments() -> 
     assert traces[0].package is None and traces[0].output is None
     assert traces[0].rejected[0]["text"] == ""
     assert traces[0].rejected[0]["reason"]
+    # Skälet sparas som en kod utan innehåll, så att underkännanden kan följas upp utan kunddata.
+    assert traces[0].rejected[0]["code"] == "literal_number"
+    assert "98765" not in json.dumps(traces[0].rejected)
     assert traces[0].tool_calls == []
 
 
@@ -205,6 +208,7 @@ def test_verifier_rejects_literal_numbers_and_unknown_ids() -> None:
     assert len(res.accepted) == 2
     reasons = " ".join(r.reason for r in res.rejected)
     assert "siffror" in reasons and "okända" in reasons and "länkar" in reasons
+    assert [r.code for r in res.rejected] == ["literal_number", "unknown_fact", "unsafe_content"]
 
 
 def test_verifier_downgrades_unsupported_causal_claims() -> None:

@@ -275,6 +275,7 @@ class AIService:
                         {
                             "text": r.claim.get("text", "") if self.keep_payloads else "",
                             "reason": r.reason if self.keep_payloads else "påstående underkändes av verifieraren",
+                            "code": r.code,  # innehållslös skälkod, sparas alltid
                         }
                         for r in verification.rejected
                     ]

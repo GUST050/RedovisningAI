@@ -45,6 +45,8 @@ CLAIM_SCHEMA: dict[str, Any] = {
 class Rejection:
     claim: dict[str, Any]
     reason: str
+    # Skäl utan innehåll (t.ex. "literal_number") som kan sparas i AI-spåret även när texten inte får det.
+    code: str = "other"
 
 
 @dataclass(slots=True)
@@ -105,29 +107,33 @@ def verify_claims(
         }
         text = claim["text"]
         if claim["type"] not in CLAIM_TYPES:
-            res.rejected.append(Rejection(claim, "okänd påståendetyp"))
+            res.rejected.append(Rejection(claim, "okänd påståendetyp", "unknown_type"))
             continue
         if UNSAFE.search(text):
-            res.rejected.append(Rejection(claim, "länkar, bilder eller HTML är inte tillåtna"))
+            res.rejected.append(Rejection(claim, "länkar, bilder eller HTML är inte tillåtna", "unsafe_content"))
             continue
         referenced = set(PLACEHOLDER_RE.findall(text)) | set(claim["fact_ids"])
         unknown = [f for f in referenced if f not in store]
         if unknown:
-            res.rejected.append(Rejection(claim, f"okända fakta-id: {', '.join(sorted(unknown))}"))
+            res.rejected.append(Rejection(claim, f"okända fakta-id: {', '.join(sorted(unknown))}", "unknown_fact"))
             continue
         if client_facing:
             internal = [f for f in referenced if store.get(f).visibility is not Visibility.CLIENT_SAFE]  # type: ignore[union-attr]
             if internal:
-                res.rejected.append(Rejection(claim, "interna uppgifter får inte användas i kundtext"))
+                res.rejected.append(Rejection(claim, "interna uppgifter får inte användas i kundtext", "internal_fact"))
                 continue
         literal = find_literal_numbers(text, allowed)
         if literal:
             res.rejected.append(
-                Rejection(claim, "siffror skrivna som text: " + ", ".join(literal[:3]) + " – använd {f:id}")
+                Rejection(
+                    claim,
+                    "siffror skrivna som text: " + ", ".join(literal[:3]) + " – använd {f:id}",
+                    "literal_number",
+                )
             )
             continue
         if claim["type"] in ("OBSERVATION", "EXPLANATION") and not referenced:
-            res.rejected.append(Rejection(claim, f"{claim['type']} kräver minst ett fakta-id"))
+            res.rejected.append(Rejection(claim, f"{claim['type']} kräver minst ett fakta-id", "missing_fact"))
             continue
         if CAUSAL.search(text) and claim["type"] != "HYPOTHESIS":
             has_component = any(store.get(f).kind == "variance_component" for f in referenced)  # type: ignore[union-attr]
