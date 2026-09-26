@@ -306,7 +306,7 @@ def calculate_metric(
             res = definition.compute(ctx)
     except Exception as exc:  # beräkningsfel ska synas, inte krascha analysen
         res = MetricResult(None, FactStatus.ERROR, {}, note=str(exc))
-    store = store or FactStore()
+    store = store if store is not None else FactStore()  # en tom store är falsk; använd ändå anroparens
     return store.new(
         "metric",
         f"metric:{code}",

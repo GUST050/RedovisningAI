@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
@@ -32,12 +33,14 @@ from redovisningai.accounting.statements import StatementMapping, balance_sheet,
 from redovisningai.accounting.variance import category_bridge, drilldown, line_accounts, result_bridge
 from redovisningai.cases.builder import Case, build_cases
 from redovisningai.domain.ledger import Ledger
-from redovisningai.facts.model import CALC_VERSION, FactStatus, FactStore, Visibility
+from redovisningai.facts.model import CALC_VERSION, Fact, FactStatus, FactStore, Visibility
 from redovisningai.findings.lifecycle import FindingRecord, SuppressionRule, reconcile
 from redovisningai.maturity.assess import AccountingMethod, Maturity, assess
 from redovisningai.memory.resolutions import Resolution, apply_memory
 from redovisningai.rules.engine import CompanySettings, FindingCandidate, RuleContext, RuleDefinition, run_rules
 from redovisningai.rules.rates import RateTable, default_rates
+
+log = logging.getLogger(__name__)
 
 PAYROLL = AccountSet.of((7000, 7699), (2710, 2719))
 
@@ -122,7 +125,9 @@ class CompanyAnalysis:
             maturity=maturity or self.maturity(period),
             rates=self.rates,
             param_overrides=self.ctx.param_overrides,
-            store=store or FactStore(),
+            # Inte `store or …`: en tom FactStore är falsk och kontrollernas fakta hamnade då
+            # i en annan store än granskningens, så ärendetexter kunde varken verifieras eller renderas.
+            store=store if store is not None else FactStore(),
         )
         return run_rules(rctx, self.catalog, include_aml=include_aml)
 
@@ -143,6 +148,17 @@ class CompanyAnalysis:
         existing = list(existing or [])
         res = reconcile(existing, candidates, period.spec, suppressions=suppressions, now=now)
         records = existing + res.created
+        # Öppna fynd från tidigare granskningar ingår i periodens ärenden men deras kontroller körs
+        # inte om; lägg deras sparade fakta i storen så att allt ärendena hänvisar till går att verifiera.
+        for record in records:
+            for fact in record.facts:
+                if not fact.get("id") or fact["id"] in store:
+                    continue
+                try:
+                    store.add(Fact.from_dict(fact))
+                except (ValueError, ArithmeticError) as exc:
+                    # En trasig sparad post får inte stoppa granskningen; påståenden om den underkänns.
+                    log.warning("Kunde inte läsa sparat faktum %s för fynd %s: %s", fact["id"], record.id, exc)
         apply_memory(records, resolutions or [], self.ledger, today=now.date())
         cases = build_cases([r for r in records if period.spec in r.seen_in_reviews or r.status.is_open])
         return ReviewResult(period, mat, records, cases, store, len(res.created), len(res.auto_closed))
@@ -347,9 +363,13 @@ class CompanyAnalysis:
         analysis_period = p
         compare = self.period(compare_spec) if compare_spec else same_period_previous_year(analysis_period, self.ledger)
         comparison = validate_comparison(analysis_period, compare, self.index)
-        store = review.store
+        # Paketets fakta är bara periodens nyckeltal och resultatbrygga. Granskningens store rymmer även
+        # kontrollernas fakta (t.ex. normalnivåer på lönekonton i fynd), och de ska inte följa med till AI.
+        store = FactStore()
         metrics = self.metric_facts(analysis_period, compare, store, low_maturity=review.maturity.low_periodization)
         bridge = result_bridge(self.index, analysis_period, compare, mapping=self.ctx.statement_mapping, store=store)
+        for fact in store:
+            review.store.add(fact)  # verifieraren slår upp påståendenas fakta-id i granskningens store
         open_cases = [c for c in review.cases if c.visibility is not Visibility.RESTRICTED_AML]
         return {
             "company": self.ctx.name,

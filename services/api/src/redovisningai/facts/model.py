@@ -75,6 +75,26 @@ class Fact:
             "display": render_value(self),
         }
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Fact:
+        """Återskapa ett Fact från to_dict() (t.ex. fakta som sparats med ett fynd)."""
+        value = data.get("value")
+        return cls(
+            id=str(data["id"]),
+            kind=str(data.get("kind", "")),
+            subject=str(data.get("subject", "")),
+            label=str(data.get("label", "")),
+            value=None if value is None else Decimal(str(value)),
+            unit=Unit(data.get("unit", Unit.SEK.value)),
+            period=data.get("period"),
+            compare_period=data.get("compare_period"),
+            status=FactStatus(data.get("status", FactStatus.CALCULATED.value)),
+            lineage=dict(data.get("lineage") or {}),
+            # Okänd synlighet behandlas försiktigt: inte kundsäker.
+            visibility=Visibility(data.get("visibility", Visibility.INTERNAL.value)),
+            text_value=data.get("text_value"),
+        )
+
 
 def make_fact_id(kind: str, subject: str, period: str | None, compare: str | None = None, extra: str = "") -> str:
     raw = json.dumps([kind, subject, period, compare, extra, CALC_VERSION])

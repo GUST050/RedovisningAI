@@ -311,7 +311,7 @@ class FakeProvider:
         self.region: str | None = "local"
         self.responses = responses or {}
         self.calls: list[dict[str, Any]] = []
-        self.store = store_for_fallback or FactStore()
+        self.store = store_for_fallback if store_for_fallback is not None else FactStore()
 
     def _answer(self, task: str, user_content: str) -> dict[str, Any]:
         self.calls.append({"task": task, "user_content": user_content})

@@ -76,7 +76,13 @@ def cmd_analyze(args: argparse.Namespace) -> int:
             Table(
                 ["Allvar", "Ärende", "Trolig orsak", "Åtgärd", "Verifikationer"],
                 [
-                    [c["severity"], c["title"], c["root_cause"], c["suggested_action"], ", ".join(c["vouchers"])]
+                    [
+                        c["severity"],
+                        c["title"],
+                        _render_text(c["root_cause"], [x for f in c["findings"] for x in f.get("facts", [])]),
+                        c["suggested_action"],
+                        ", ".join(c["vouchers"]),
+                    ]
                     for c in cases
                 ],
             ),
@@ -118,10 +124,15 @@ def cmd_analyze(args: argparse.Namespace) -> int:
 
 
 def _render(f: dict[str, object]) -> str:
+    return _render_text(f["description"], f.get("facts", []))  # type: ignore[arg-type]
+
+
+def _render_text(text: object, facts: list[dict[str, object]]) -> str:
+    """Ersätt {f:id} med faktans visningsvärde (samma som webben gör för fynd och ärenden)."""
     import re
 
-    facts = {x["id"]: x["display"] for x in f.get("facts", [])}  # type: ignore[union-attr, index]
-    return re.sub(r"\{f:([^}\s]+)\}", lambda m: str(facts.get(m.group(1), "")), str(f["description"]))
+    display = {x["id"]: x["display"] for x in facts}
+    return re.sub(r"\{f:([^}\s]+)\}", lambda m: str(display.get(m.group(1), "")), str(text))
 
 
 def _provider(name: str):  # type: ignore[no-untyped-def]
