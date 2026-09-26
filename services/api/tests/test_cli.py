@@ -107,3 +107,20 @@ def test_eval_accepts_openai_and_reports_missing_key(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(config, "get_settings", lambda: config.Settings(_env_file=None))
     with pytest.raises(SystemExit, match="AI kunde inte konfigureras: OpenAI kräver OPENAI_API_KEY"):
         main(["eval", "--provider", "openai"])
+
+
+def test_ai_status_and_check_commands(monkeypatch, capsys: pytest.CaptureFixture[str]) -> None:  # type: ignore[no-untyped-def]
+    import redovisningai.config as config
+
+    for name in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(config, "get_settings", lambda: config.Settings(_env_file=None, ai_enabled=None))
+    assert main(["ai-status"]) == 0
+    assert "lägg ANTHROPIC_API_KEY" in capsys.readouterr().out
+    assert main(["ai-check"]) == 1
+
+    settings = config.Settings(_env_file=None, ai_enabled=True, ai_platform="fake")
+    monkeypatch.setattr(config, "get_settings", lambda: settings)
+    assert main(["ai-check"]) == 0
+    out = capsys.readouterr().out
+    assert "✓ Läsverktyg (som AI-analytikern)" in out and "AI fungerar." in out

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEV_MASTER_KEY = "dev-master-key-change-me-0123456789abcdef"
@@ -42,18 +42,25 @@ class Settings(BaseSettings):
     oidc_audience: str | None = None
     oidc_jwks_url: str | None = None
 
-    # AI
-    ai_enabled: bool = False
-    ai_platform: str = "bedrock"  # bedrock | vertex | anthropic | openai | fake
+    # AI. Standard: på så fort en nyckel finns – Claude (ANTHROPIC_API_KEY) först och OpenAI
+    # (OPENAI_API_KEY) som reserv vid tillfälliga fel. RAI_AI_ENABLED: auto | true | false.
+    ai_enabled: bool | None = None  # None = auto
+    ai_platform: str = "auto"  # auto | anthropic | openai | bedrock | vertex | fake
     ai_region: str | None = "eu-north-1"
     ai_project_id: str | None = None
-    ai_secondary_platform: str | None = None  # failover
+    ai_secondary_platform: str | None = "auto"  # failover; auto = den andra leverantören med nyckel
     ai_secondary_region: str | None = None
     ai_model_strong: str = "claude-opus-5"
     ai_model_medium: str = "claude-opus-5"
     ai_model_small: str = "claude-opus-5"
     ai_refusal_fallback_model: str | None = "claude-opus-4-8"
+    ai_timeout_s: float = Field(default=300.0, gt=0)
     ai_trace_retention_days: int = 30
+    anthropic_api_key: str | None = Field(
+        default=None, validation_alias=AliasChoices("ANTHROPIC_API_KEY", "RAI_ANTHROPIC_API_KEY")
+    )
+    # Nyckeln skickas bara hit – inte till en ANTHROPIC_BASE_URL som råkar finnas i miljön.
+    anthropic_base_url: str = "https://api.anthropic.com"
     openai_api_key: str | None = Field(
         default=None, validation_alias=AliasChoices("OPENAI_API_KEY", "RAI_OPENAI_API_KEY")
     )
@@ -61,11 +68,59 @@ class Settings(BaseSettings):
     openai_model_strong: str = "gpt-6-luna"
     openai_model_medium: str = "gpt-6-luna"
     openai_model_small: str = "gpt-6-luna"
-    # Testläge är standard även med aktiverad AI: lågt tak, ingen automatisk reservleverantör.
-    ai_test_mode: bool = True
+    # Testläge för en försiktig provkörning: lågt tak, korta svar, ingen reservleverantör. I full
+    # drift (standard) begränsas kostnaden av byråns månadsbudget för tokens.
+    ai_test_mode: bool = False
     ai_test_monthly_token_cap: int = Field(default=20_000, ge=1)
     ai_test_max_output_tokens: int = Field(default=1_500, ge=1)
     ai_test_max_tool_calls: int = Field(default=3, ge=0)
+
+    @field_validator("ai_enabled", mode="before")
+    @classmethod
+    def _auto_enabled(cls, value: object) -> object:
+        if value is None or (isinstance(value, str) and value.strip().lower() in {"", "auto"}):
+            return None
+        return value
+
+    @field_validator("ai_platform", mode="before")
+    @classmethod
+    def _platform(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip().lower() or "auto"
+        return value
+
+    @field_validator("ai_secondary_platform", mode="before")
+    @classmethod
+    def _secondary(cls, value: object) -> object:
+        if isinstance(value, str):
+            value = value.strip().lower()
+            return None if value in {"", "none", "off", "false"} else value
+        return value
+
+    @field_validator("anthropic_api_key", "openai_api_key", mode="before")
+    @classmethod
+    def _key(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip() or None
+        return value
+
+    def ai_platforms(self) -> tuple[str | None, str | None]:
+        """Primär och reserv efter "auto". Claude går före OpenAI; None = ingen."""
+        keys = [p for p, key in (("anthropic", self.anthropic_api_key), ("openai", self.openai_api_key)) if key]
+        primary: str | None = self.ai_platform
+        if primary == "auto":
+            primary = keys[0] if keys else None
+        secondary = self.ai_secondary_platform
+        if secondary == "auto":
+            secondary = next((p for p in keys if p != primary), None)
+        return primary, secondary if secondary != primary else None
+
+    @property
+    def ai_requested(self) -> bool:
+        """AI ska användas: uttryckligen påslaget, eller "auto" och det finns en leverantör."""
+        if self.ai_enabled is False:
+            return False
+        return self.ai_enabled is True or self.ai_platforms()[0] is not None
 
     # Fortnox
     fortnox_client_id: str | None = None

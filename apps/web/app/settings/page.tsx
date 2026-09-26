@@ -25,13 +25,18 @@ type Rate = { code: string; value: string; valid_from: string; valid_to: string 
 type Health = { rule_code: string; total: number; actioned: number; not_actioned: number; open: number; precision: string | number | null };
 type Suppression = { id: string; rule_code: string; reason: string; company_id: string | null; expires_at: string | null; accounts: number[]; text_contains: string | null; created_by: string };
 type AuditRow = { at: string; user: string | null; company_id: string | null; action: string; details: Record<string, unknown> };
+type AiProvider = { role: string; platform: string; label: string; models: Record<string, string>; ready: boolean; problem: string | null };
 type AiStatus = {
   enabled: boolean;
   requested: boolean;
-  platform: string;
+  switched_off: boolean;
+  problem: string | null;
+  platform: string | null;
   region: string | null;
   secondary: string | null;
   models: Record<string, string>;
+  providers: AiProvider[];
+  keys: { anthropic: boolean; openai: boolean };
   tokens_used_this_month: number;
   monthly_budget: number | null;
   test_mode: boolean;
@@ -39,6 +44,8 @@ type AiStatus = {
   test_max_tool_calls: number | null;
   notice: string;
 };
+type AiCheckStep = { name: string; ok: boolean; model?: string; answer?: string; error?: string; tokens: number; seconds: number };
+type AiCheck = { ok: boolean; results: (Omit<AiProvider, "ready" | "problem"> & { ok: boolean; error: string | null; checks: AiCheckStep[] })[] };
 type Proposal = { target: string; code: string; change: string; value: string | null; valid_from: string | null; valid_to: string | null; source_url: string; rationale: string };
 
 const CATEGORY_SV: Record<string, string> = {
@@ -323,40 +330,101 @@ function AuditView() {
   );
 }
 
+const TIER_SV: Record<string, string> = { strong: "analys", medium: "texter", small: "klassning" };
+
 function AiView() {
+  const me = useMe();
   const data = useLoad<AiStatus>("/api/ai/status");
+  const [check, setCheck] = useState<AiCheck | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [err, setErr] = useState<unknown>(null);
   if (data.error) return <ErrorBox error={data.error} />;
   if (!data.data) return <Loading />;
   const d = data.data;
   const used = d.monthly_budget ? Math.round((d.tokens_used_this_month / d.monthly_budget) * 100) : null;
+  const runCheck = () => {
+    setChecking(true);
+    setErr(null);
+    send<AiCheck>("/api/ai/check", "POST")
+      .then((r) => {
+        setCheck(r);
+        data.reload();
+      })
+      .catch(setErr)
+      .finally(() => setChecking(false));
+  };
   return (
-    <Card title="AI-tjänst">
-      <dl className="grid max-w-xl grid-cols-2 gap-y-1 text-[13px]">
-        <dt className="text-muted">Status</dt>
-        <dd>{d.enabled ? "Aktiverad" : d.requested ? "Kan inte starta – kontrollera AI-nyckel och serverkonfiguration" : "Avstängd – regelbaserade texter används"}</dd>
-        <dt className="text-muted">Plattform</dt>
-        <dd>{d.platform}{d.region && ` (${d.region})`}{d.secondary && ` · reserv: ${d.secondary}`}</dd>
-        <dt className="text-muted">Läge</dt>
-        <dd>{d.test_mode ? "Test – reservleverantör avstängd" : "Full drift"}</dd>
-        {Object.entries(d.models).map(([k, v]) => (
-          <div key={k} className="contents">
-            <dt className="text-muted">Modell ({k === "strong" ? "analys" : k === "medium" ? "texter" : "klassning"})</dt>
-            <dd className="font-mono text-[12px]">{v}</dd>
+    <div className="space-y-4">
+      <Card
+        title="AI-tjänst"
+        actions={me?.role === "ADMIN" && d.requested ? (
+          <Button variant="secondary" disabled={checking} onClick={runCheck}>{checking ? "Testar…" : "Testa AI"}</Button>
+        ) : undefined}
+      >
+        <dl className="grid max-w-2xl grid-cols-[minmax(0,12rem)_1fr] gap-x-3 gap-y-1 text-[13px]">
+          <dt className="text-muted">Status</dt>
+          <dd>
+            {d.enabled ? "Aktiverad – AI används som standard" : d.switched_off ? "Avstängd (RAI_AI_ENABLED=false) – regelbaserade texter används" : `Kan inte starta – ${d.problem ?? "kontrollera AI-nyckel och serverkonfiguration"}`}
+          </dd>
+          {d.providers.map((p) => (
+            <div key={p.role} className="contents">
+              <dt className="text-muted">{p.role === "primär" ? "Används först" : "Reserv vid tillfälligt fel"}</dt>
+              <dd>
+                {p.label}
+                {Object.keys(p.models).length > 0 && <span className="ml-1 font-mono text-[12px] text-muted">({Array.from(new Set(Object.values(p.models))).join(", ")})</span>}
+                {!p.ready && <span className="ml-1 text-high">– {p.problem}</span>}
+              </dd>
+            </div>
+          ))}
+          <dt className="text-muted">Nycklar</dt>
+          <dd>Anthropic: {d.keys.anthropic ? "finns" : "saknas"} · OpenAI: {d.keys.openai ? "finns" : "saknas"}</dd>
+          <dt className="text-muted">Läge</dt>
+          <dd>{d.test_mode ? "Testläge – korta svar, ingen reserv" : "Full drift"}</dd>
+          {Object.entries(d.models).map(([k, v]) => (
+            <div key={k} className="contents">
+              <dt className="text-muted">Modell ({TIER_SV[k] ?? k})</dt>
+              <dd className="font-mono text-[12px]">{v}</dd>
+            </div>
+          ))}
+          <dt className="text-muted">Förbrukning denna månad</dt>
+          <dd>
+            {d.tokens_used_this_month.toLocaleString("sv-SE")} tokens
+            {d.monthly_budget !== null && ` av ${d.monthly_budget.toLocaleString("sv-SE")}`}
+            {used !== null && ` (${used} %)`}
+          </dd>
+          {d.test_mode && <>
+            <dt className="text-muted">Testgränser</dt>
+            <dd>{d.test_max_output_tokens?.toLocaleString("sv-SE")} utdata-tokens/anrop · {d.test_max_tool_calls} verktygsanrop</dd>
+          </>}
+        </dl>
+        {!d.keys.anthropic && !d.keys.openai && (
+          <p className="mt-3 text-[12px] text-muted">Lägg <span className="font-mono">ANTHROPIC_API_KEY</span> och/eller <span className="font-mono">OPENAI_API_KEY</span> i <span className="font-mono">.env</span> på servern och starta om – då används AI automatiskt.</p>
+        )}
+        <p className="mt-3 flex items-center gap-2 text-[12px] text-muted"><AiBadge /> {d.notice}</p>
+        <p className="mt-1 text-[12px] text-muted">Personnamn maskeras innan anrop, lönerader och PTL skickas aldrig. Kontrollera respektive leverantörs datavillkor före användning med riktiga kunduppgifter. Tokenbudgeten är inte ett exakt kostnadstak; sätt även en utgiftsgräns hos leverantören.</p>
+      </Card>
+      <ErrorBox error={err} />
+      {check && (
+        <Card title={check.ok ? "AI-test: allt fungerar" : "AI-test: något fungerar inte"}>
+          <p className="mb-2 text-[12px] text-muted">Korta provanrop utan kunddata: ett svar i JSON-format och ett anrop till ett läsverktyg (samma väg som AI-analytikern).</p>
+          <div className="space-y-3">
+            {check.results.map((r) => (
+              <div key={r.role} className="rounded-md border border-line p-3">
+                <div className="mb-1 font-medium">{r.ok ? "✓" : "✗"} {r.label} <span className="text-[12px] font-normal text-muted">({r.role})</span></div>
+                {r.error && <p className="text-[13px] text-high">{r.error}</p>}
+                <ul className="space-y-0.5 text-[13px]">
+                  {r.checks.map((c) => (
+                    <li key={c.name} className={c.ok ? "text-ok" : "text-high"}>
+                      {c.ok ? "✓" : "✗"} {c.name}: {c.ok ? `${c.model ?? ""} · ${c.seconds} s · ${c.tokens.toLocaleString("sv-SE")} tokens${c.answer ? ` – ”${c.answer}”` : ""}` : c.error ?? `oväntat svar: ${c.answer ?? ""}`}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
           </div>
-        ))}
-        <dt className="text-muted">Förbrukning denna månad</dt>
-        <dd>
-          {d.tokens_used_this_month.toLocaleString("sv-SE")} tokens
-          {used !== null && ` (${used} % av budget)`}
-        </dd>
-        {d.test_mode && <>
-          <dt className="text-muted">Testgränser</dt>
-          <dd>{d.monthly_budget?.toLocaleString("sv-SE") ?? "–"} tokens/månad · {d.test_max_output_tokens?.toLocaleString("sv-SE")} utdata-tokens/anrop · {d.test_max_tool_calls} verktygsanrop</dd>
-        </>}
-      </dl>
-      <p className="mt-3 flex items-center gap-2 text-[12px] text-muted"><AiBadge /> {d.notice}</p>
-      <p className="mt-1 text-[12px] text-muted">Personnamn maskeras innan anrop. Kontrollera respektive leverantörs datavillkor och projektets regioninställning före användning med riktiga kunduppgifter. Tokenbudgeten är inte ett exakt kostnadstak; sätt även en utgiftsgräns hos leverantören.</p>
-    </Card>
+        </Card>
+      )}
+    </div>
   );
 }
 

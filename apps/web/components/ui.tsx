@@ -76,10 +76,12 @@ export function StatusBadge({ status }: { status: string }) {
   return <span className={cx("inline-block rounded px-1.5 py-0.5 text-[11px] font-medium", tone)}>{STATUS_SV[status] ?? status}</span>;
 }
 
-/** Märkning av AI-genererat innehåll (AI Act art. 50). Texten visas alltid som ren text. */
-export function AiBadge({ source }: { source?: string }) {
+/** Märkning av AI-genererat innehåll (AI Act art. 50). Texten visas alltid som ren text.
+ *  `note` förklarar varför regeltext visas i stället för AI (t.ex. slut på budget eller fel nyckel). */
+export function AiBadge({ source, note }: { source?: string; note?: string | null }) {
   if (source === "rules") {
-    return <span className="rounded bg-low-soft px-1.5 py-0.5 text-[11px] text-low" title="Genererad av fasta regler (AI ej tillgänglig)">Regelbaserad text</span>;
+    const badge = <span className="rounded bg-low-soft px-1.5 py-0.5 text-[11px] text-low" title={note ?? "Genererad av fasta regler (AI ej tillgänglig)"}>Regelbaserad text</span>;
+    return note ? <>{badge}<span className="text-[11px] text-muted">AI användes inte: {note}</span></> : badge;
   }
   return <span className="rounded bg-ai-soft px-1.5 py-0.5 text-[11px] font-medium text-ai" title="Texten är AI-genererad och ska granskas av konsulten. Siffror kommer från beräkningsmotorn.">AI-genererad</span>;
 }

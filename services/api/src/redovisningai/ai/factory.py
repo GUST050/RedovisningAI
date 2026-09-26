@@ -3,13 +3,26 @@
 from __future__ import annotations
 
 import logging
+import time
 import uuid
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Any
 
 from sqlalchemy import select
 
 from redovisningai.ai.providers.anthropic_provider import AnthropicConfig, AnthropicProvider
-from redovisningai.ai.providers.base import FailoverProvider, ModelProvider, ModelTier, ProviderError, Usage
+from redovisningai.ai.providers.base import (
+    FailoverProvider,
+    ModelProvider,
+    ModelTier,
+    ProviderError,
+    StructuredResult,
+    ToolBudget,
+    ToolSpec,
+    Usage,
+)
 from redovisningai.ai.providers.openai_provider import OpenAIConfig, OpenAIProvider
 from redovisningai.ai.service import AIService, AITrace, FakeProvider
 from redovisningai.config import Settings, get_settings
@@ -17,6 +30,23 @@ from redovisningai.db import models as m
 from redovisningai.db.session import TenantContext, tenant_session
 
 log = logging.getLogger(__name__)
+
+
+PLATFORM_LABELS = {
+    "anthropic": "Claude (Anthropic)",
+    "openai": "OpenAI",
+    "bedrock": "Claude via AWS Bedrock",
+    "vertex": "Claude via Google Vertex AI",
+    "fake": "Testleverantör",
+}
+
+
+def platform_models(platform: str | None, s: Settings) -> dict[str, str]:
+    if platform == "openai":
+        return {"strong": s.openai_model_strong, "medium": s.openai_model_medium, "small": s.openai_model_small}
+    if platform in {"anthropic", "bedrock", "vertex"}:
+        return {"strong": s.ai_model_strong, "medium": s.ai_model_medium, "small": s.ai_model_small}
+    return {}
 
 
 def _provider(platform: str, region: str | None, s: Settings) -> ModelProvider:
@@ -32,10 +62,14 @@ def _provider(platform: str, region: str | None, s: Settings) -> ModelProvider:
                     ModelTier.MEDIUM: s.openai_model_medium,
                     ModelTier.SMALL: s.openai_model_small,
                 },
+                timeout_s=s.ai_timeout_s,
+                max_retries=0 if s.ai_test_mode else 2,
             )
         )
     if platform not in {"bedrock", "vertex", "anthropic"}:
         raise ProviderError(f"Okänd AI-plattform: {platform}")
+    if platform == "anthropic" and not s.anthropic_api_key:
+        raise ProviderError("Claude (Anthropic) kräver ANTHROPIC_API_KEY i API-serverns miljö.")
     cfg = AnthropicConfig(
         platform=platform,
         region=region,
@@ -46,23 +80,152 @@ def _provider(platform: str, region: str | None, s: Settings) -> ModelProvider:
             ModelTier.SMALL: s.ai_model_small,
         },
         refusal_fallback_model=None if s.ai_test_mode else s.ai_refusal_fallback_model,
+        timeout_s=s.ai_timeout_s,
         max_retries=0 if s.ai_test_mode else 2,
+        api_key=s.anthropic_api_key if platform == "anthropic" else None,
+        base_url=s.anthropic_base_url if platform == "anthropic" else None,
     )
     return AnthropicProvider(cfg)
 
 
+@dataclass(slots=True)
+class ConfiguredProvider:
+    role: str  # "primär" | "reserv"
+    platform: str
+    provider: ModelProvider | None
+    problem: str | None = None
+
+
+def configured_providers(s: Settings | None = None) -> list[ConfiguredProvider]:
+    """Leverantörerna i den ordning de används. En som inte går att konfigurera (t.ex. saknad
+    nyckel) får en felorsak men stoppar inte de andra."""
+    s = s or get_settings()
+    primary, secondary = s.ai_platforms()
+    wanted = [("primär", primary, s.ai_region)]
+    if not s.ai_test_mode:  # testläget använder aldrig en andra betald leverantör
+        wanted.append(("reserv", secondary, s.ai_secondary_region or s.ai_region))
+    out: list[ConfiguredProvider] = []
+    for role, platform, region in wanted:
+        if not platform:
+            continue
+        try:
+            out.append(ConfiguredProvider(role, platform, _provider(platform, region, s)))
+        except ProviderError as exc:
+            log.error("AI-leverantören %s kunde inte konfigureras: %s", platform, exc)
+            out.append(ConfiguredProvider(role, platform, None, str(exc)))
+    return out
+
+
 def build_provider(s: Settings | None = None) -> ModelProvider | None:
     s = s or get_settings()
-    if not s.ai_enabled:
+    if not s.ai_requested:
         return None
-    try:
-        providers = [_provider(s.ai_platform, s.ai_region, s)]
-        if s.ai_secondary_platform and not s.ai_test_mode:
-            providers.append(_provider(s.ai_secondary_platform, s.ai_secondary_region, s))
-    except ProviderError as exc:
-        log.error("AI kunde inte konfigureras: %s", exc)
+    providers = [c.provider for c in configured_providers(s) if c.provider is not None]
+    if not providers:
         return None
     return providers[0] if len(providers) == 1 else FailoverProvider(providers)
+
+
+# ------------------------------------------------------------------ anslutningstest
+CHECK_VALUE = "RAI-4711"
+CHECK_SYSTEM = "Det här är ett anslutningstest för RedovisningAI. Svara kort på svenska och följ JSON-schemat."
+CHECK_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {"ok": {"type": "boolean"}, "svar": {"type": "string"}},
+    "required": ["ok", "svar"],
+    "additionalProperties": False,
+}
+_CHECK_TOOL = ToolSpec(
+    name="hamta_kontrollvarde",
+    description="Hämtar kontrollvärdet för anslutningstestet.",
+    input_schema={"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+    handler=lambda _args: {"kontrollvarde": CHECK_VALUE},
+)
+
+
+def _run_check(
+    name: str, call: Callable[[], StructuredResult], passed: Callable[[StructuredResult], bool]
+) -> dict[str, Any]:
+    start = time.monotonic()
+    try:
+        res = call()
+    except Exception as exc:  # visas för administratören; anropet innehåller inga kunddata
+        return {
+            "name": name,
+            "ok": False,
+            "error": (str(exc) or type(exc).__name__)[:300],
+            "tokens": 0,
+            "seconds": round(time.monotonic() - start, 1),
+        }
+    return {
+        "name": name,
+        "ok": passed(res),
+        "model": res.model,
+        "answer": str(res.data.get("svar", ""))[:200],
+        "tokens": res.usage.total,
+        "tool_calls": len(res.tool_calls),
+        "seconds": round(time.monotonic() - start, 1),
+    }
+
+
+def _checks(provider: ModelProvider, *, tools: bool) -> list[dict[str, Any]]:
+    if isinstance(provider, FakeProvider):
+        provider.responses.setdefault("CHECK", lambda _c: {"ok": True, "svar": "Testleverantören svarar."})
+        provider.responses.setdefault("CHECK_TOOLS", lambda _c: {"ok": True, "svar": CHECK_VALUE})
+    checks = [
+        _run_check(
+            "Svar i JSON-format",
+            lambda: provider.structured(
+                task="CHECK",
+                tier=ModelTier.SMALL,
+                system=CHECK_SYSTEM,
+                user_content="Bekräfta att du fungerar: sätt ok till true och svara med en kort mening.",
+                schema=CHECK_SCHEMA,
+                max_tokens=4000,
+            ),
+            lambda r: r.data.get("ok") is True,
+        )
+    ]
+    if tools:
+        checks.append(
+            _run_check(
+                "Läsverktyg (som AI-analytikern)",
+                lambda: provider.run_tools(
+                    task="CHECK_TOOLS",
+                    tier=ModelTier.SMALL,
+                    system=CHECK_SYSTEM,
+                    user_content="Anropa verktyget hamta_kontrollvarde en gång och svara sedan med "
+                    "kontrollvärdet i fältet svar. Sätt ok till true.",
+                    tools=[_CHECK_TOOL],
+                    schema=CHECK_SCHEMA,
+                    budget=ToolBudget(max_tool_calls=2, max_iterations=3),
+                    max_tokens=4000,
+                ),
+                lambda r: CHECK_VALUE in str(r.data.get("svar", "")) and len(r.tool_calls) >= 1,
+            )
+        )
+    return checks
+
+
+def check_providers(s: Settings | None = None, *, tools: bool = True) -> list[dict[str, Any]]:
+    """Kort provanrop till varje konfigurerad leverantör utan kunddata: visar om nyckel, modell
+    och nätverk fungerar och – med tools=True – verktygsloopen som AI-analytikern använder."""
+    s = s or get_settings()
+    results: list[dict[str, Any]] = []
+    for item in configured_providers(s):
+        checks = _checks(item.provider, tools=tools) if item.provider is not None else []
+        results.append(
+            {
+                "role": item.role,
+                "platform": item.platform,
+                "label": PLATFORM_LABELS.get(item.platform, item.platform),
+                "models": platform_models(item.platform, s),
+                "checks": checks,
+                "error": item.problem,
+                "ok": item.provider is not None and all(c["ok"] for c in checks),
+            }
+        )
+    return results
 
 
 class DbBudget:

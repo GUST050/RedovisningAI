@@ -148,41 +148,53 @@ Fliken **Jämförelse & rapport** hos varje kund:
 
 ## AI
 
-AI är avstängt som standard och allt fungerar utan AI (regelbaserade texter som märks som
-sådana). Slå på med `RAI_AI_ENABLED=true` och välj plattform:
+AI är på som standard så fort en nyckel finns i `.env`:
 
-| `RAI_AI_PLATFORM` | Behöver | Kommentar |
+```bash
+ANTHROPIC_API_KEY=sk-ant-…
+OPENAI_API_KEY=sk-…
+```
+
+Claude (Anthropic, `claude-opus-5`) används först och OpenAI som reserv vid tillfälliga fel. Starta
+om efter ändringar (`./scripts/start-mac.sh` eller `docker compose up -d api worker`). Utan nyckel,
+eller med `RAI_AI_ENABLED=false`, används regelbaserade texter som märks som sådana. Kunde AI inte
+användas för en text (fel nyckel, slut på budget, avbrott) står orsaken vid texten.
+
+**Testa AI:n med dina nycklar:**
+
+```bash
+./scripts/test-ai.sh          # provanrop per leverantör: svar i JSON-format och läsverktyg (inga kunddata)
+./scripts/test-ai.sh --eval   # dessutom AI-utvärderingen mot de riktiga modellerna på demobolagen
+```
+
+Samma test finns under **Regler och inställningar → AI → Testa AI**. `./scripts/start-mac.sh` gör ett
+kort provanrop varje gång programmet startas. `redovisningai ai-status` visar vad som används utan
+att anropa något.
+
+| Inställning | Standard | Betydelse |
 |---|---|---|
-| `bedrock` | AWS-nycklar, `RAI_AI_REGION` (t.ex. `eu-north-1`) | Data stannar i vald AWS-region |
-| `vertex` | GCP-projekt (`RAI_AI_PROJECT_ID`), region | Data stannar i vald GCP-region |
-| `anthropic` | `ANTHROPIC_API_KEY` | Direkt mot Anthropic |
-| `openai` | `OPENAI_API_KEY` | OpenAI Responses API; sätt rätt projekt och datavillkor innan riktiga kunddata används |
+| `RAI_AI_ENABLED` | `auto` | På när en nyckel finns. `false` stänger av. |
+| `RAI_AI_PLATFORM` | `auto` | Claude om `ANTHROPIC_API_KEY` finns, annars OpenAI. Eller `anthropic`, `openai`, `bedrock`, `vertex`. |
+| `RAI_AI_SECONDARY_PLATFORM` | `auto` | Reserv: den andra leverantören som har nyckel. `none` = ingen reserv. |
+| `RAI_AI_MODEL_STRONG/MEDIUM/SMALL` | `claude-opus-5` | Claude-modell per nivå (analys, texter, klassning). |
+| `RAI_OPENAI_MODEL_STRONG/MEDIUM/SMALL` | `gpt-6-luna` | OpenAI-modell per nivå. |
+| `RAI_AI_TEST_MODE` | `false` | `true` = försiktig provkörning: korta svar, 20 000 tokens per månad, ingen reserv. |
 
-För en försiktig provkörning: sätt `RAI_AI_PLATFORM=openai` och `OPENAI_API_KEY` i din lokala
-`.env`, eller `RAI_AI_PLATFORM=anthropic` och `ANTHROPIC_API_KEY` för Claude. Sätt
-`RAI_AI_ENABLED=true` och starta om API och worker (`docker compose up -d --build api worker`).
-Hemligheterna ska finnas på servern, aldrig i webbläsaren, Git eller loggar. Du kan lägga in
-båda nycklarna och välja primär leverantör med `RAI_AI_PLATFORM`. I full drift kan du sätta
-`RAI_AI_SECONDARY_PLATFORM` till den andra leverantören; byte sker bara vid tillfälligt fel.
-För Claude i AWS/GCP används i stället `bedrock`/`vertex` och deras respektive behörigheter.
+Kostnaden begränsas av byråns månadsbudget (5 miljoner tokens per byrå och månad; syns under
+Regler och inställningar → AI). Budgeten mäts efter varje svar och är därför inte ett exakt tak vid
+samtidiga anrop – sätt också en utgiftsgräns hos Anthropic och OpenAI. Hemligheterna finns bara på
+servern, aldrig i webbläsaren, Git eller loggar. En äldre `.env` (där AI var avstängt, Bedrock och
+testläge) uppgraderas en gång av `./scripts/start-mac.sh`, med en kopia av den gamla filen.
 
-`RAI_AI_TEST_MODE=true` är standard. Det begränsar AI till ett utkast utan omskrivning eller
-automatiska SDK-omförsök per uppgift, 1 500
-utdata-tokens per modellbegäran, tre läsverktygsanrop och högst 20 000 bokförda tokens per
-byrå och månad (eller byråns lägre budget). Analytikerns verktygsloop kan fortfarande göra
-flera modellbegäranden. Automatisk reservleverantör är avstängd i testläget.
-Ändra gränserna med `RAI_AI_TEST_*`. För full drift, sätt `RAI_AI_TEST_MODE=false` först efter
-egen utvärdering. Tokenbudgeten mäts efter ett svar och är därför **inte** ett absolut
-kostnadstak vid samtidiga anrop. Sätt också projektets utgiftsgräns hos leverantören.
-Testa först på syntetiska SIE-filer; en API-nyckel innebär inte att data skickas förrän AI
-aktiveras och en AI-funktion körs. `redovisningai eval --provider openai` (eller `anthropic`,
-`bedrock`, `vertex`) kör AI-evalsen mot den riktiga leverantören på syntetiska demobolag.
+Claude i egen molnregion: `RAI_AI_PLATFORM=bedrock` (AWS-nycklar, `RAI_AI_REGION`, t.ex.
+`eu-north-1`) eller `vertex` (`RAI_AI_PROJECT_ID`, region). Anthropics eget API har i dag ingen
+EU-inferens.
 
-`RAI_AI_SECONDARY_PLATFORM` ger failover i full drift. Personnamn maskeras innan anrop, lönerader och
-PTL-signaler skickas aldrig och varje påstående kontrolleras mot beräknade fakta innan det visas.
-AI-genererad text märks i gränssnittet (AI-förordningen art. 50).
-`store=false` används på OpenAI-anrop, men leverantörens övriga databehandling och eventuell
-EU-datalokalisering beror på projektets avtal och inställningar – verifiera detta separat.
+Personnamn maskeras innan anrop, lönerader och PTL-signaler skickas aldrig och varje påstående
+kontrolleras mot beräknade fakta innan det visas. AI-genererad text märks i gränssnittet
+(AI-förordningen art. 50). `store=false` används på OpenAI-anrop, men leverantörens övriga
+databehandling och eventuell EU-datalokalisering beror på projektets avtal och inställningar –
+verifiera detta innan riktiga kunddata används.
 
 ## Säkerhet i korthet
 

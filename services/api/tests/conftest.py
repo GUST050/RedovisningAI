@@ -26,6 +26,9 @@ os.environ["RAI_STORAGE_PATH"] = tempfile.mkdtemp(prefix="rai-storage-")
 os.environ["RAI_ENV"] = "test"
 # Testerna kontrollerar att oinloggade anrop nekas – ingen automatisk standardanvändare.
 os.environ["RAI_DEV_DEFAULT_USER"] = ""
+# AI är på som standard när en nyckel finns. Testerna får aldrig göra riktiga (betalda) anrop,
+# även om utvecklaren har ANTHROPIC_API_KEY/OPENAI_API_KEY i miljön eller i .env.
+os.environ["RAI_AI_ENABLED"] = "false"
 
 
 def _pg_available() -> bool:

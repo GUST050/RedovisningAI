@@ -8,6 +8,8 @@ redovisningai migrate                                        # kör databasmigra
 redovisningai create-org "Byrån AB" --admin-email a@b.se --admin-name "Anna"
 redovisningai seed-demo                                      # demobyrå med fyra kunder
 redovisningai eval --provider fake|bedrock|vertex|anthropic|openai  # AI-evals
+redovisningai ai-status                                      # vilken AI som används (inga anrop)
+redovisningai ai-check                                       # provanrop till AI-leverantörerna
 redovisningai review-all --org <uuid>                        # granska alla kunder i en byrå
 """
 
@@ -350,6 +352,63 @@ def cmd_eval(args: argparse.Namespace) -> int:
     return 0 if all(r.passed for r in results) else 1
 
 
+def _ai_lines() -> list[str]:
+    from redovisningai.ai.factory import PLATFORM_LABELS, configured_providers, platform_models
+    from redovisningai.config import get_settings
+
+    s = get_settings()
+    keys = ", ".join(
+        f"{name}: {'finns' if value else 'saknas'}"
+        for name, value in (("ANTHROPIC_API_KEY", s.anthropic_api_key), ("OPENAI_API_KEY", s.openai_api_key))
+    )
+    lines = [f"Nycklar – {keys}"]
+    if s.ai_enabled is False:
+        return [*lines, "AI: avstängt (RAI_AI_ENABLED=false) – regelbaserade texter används"]
+    providers = configured_providers(s) if s.ai_requested else []
+    if not providers:
+        return [*lines, "AI: ingen leverantör – lägg ANTHROPIC_API_KEY och/eller OPENAI_API_KEY i .env"]
+    for p in providers:
+        model = platform_models(p.platform, s).get("strong", "")
+        state = "redo" if p.provider is not None else f"FEL: {p.problem}"
+        label = PLATFORM_LABELS.get(p.platform, p.platform) + (f" ({model})" if model else "")
+        lines.append(f"AI {p.role}: {label} – {state}")
+    lines.append("Läge: " + ("testläge (låga gränser, ingen reserv)" if s.ai_test_mode else "full drift"))
+    return lines
+
+
+def cmd_ai_status(args: argparse.Namespace) -> int:
+    for line in _ai_lines():
+        print(line)
+    return 0
+
+
+def cmd_ai_check(args: argparse.Namespace) -> int:
+    """Kort provanrop utan kunddata till varje konfigurerad AI-leverantör."""
+    from redovisningai.ai.factory import check_providers
+    from redovisningai.config import get_settings
+
+    for line in _ai_lines():
+        print(line)
+    s = get_settings()
+    results = check_providers(s, tools=not args.quick) if s.ai_requested else []
+    if not results:
+        print("Inget att testa.")
+        return 1
+    for r in results:
+        print(f"\n{r['label']} ({r['role']})")
+        if r["error"]:
+            print(f"  ✗ {r['error']}")
+        for c in r["checks"]:
+            if c["ok"]:
+                detail = f"{c.get('model')}, {c['seconds']} s, {c['tokens']} tokens – {c.get('answer', '')}"
+            else:
+                detail = c.get("error") or f"oväntat svar: {c.get('answer', '')}"
+            print(f"  {'✓' if c['ok'] else '✗'} {c['name']}: {detail}")
+    ok = all(r["ok"] for r in results)
+    print("\nAI fungerar." if ok else "\nAI fungerar inte fullt ut – se felen ovan.")
+    return 0 if ok else 1
+
+
 def cmd_review_all(args: argparse.Namespace) -> int:
     from redovisningai.ai.factory import build_ai_service
     from redovisningai.jobs.pipeline import review_all
@@ -424,6 +483,11 @@ def main(argv: list[str] | None = None) -> int:
     e = sub.add_parser("eval", help="Kör AI-evals")
     e.add_argument("--provider", default="fake", choices=AI_PLATFORMS)
     e.set_defaults(fn=cmd_eval)
+    st = sub.add_parser("ai-status", help="Visa vilken AI som används (gör inga anrop)")
+    st.set_defaults(fn=cmd_ai_status)
+    ck = sub.add_parser("ai-check", help="Provanrop utan kunddata till varje AI-leverantör")
+    ck.add_argument("--quick", action="store_true", help="Bara ett anrop per leverantör (utan läsverktyg)")
+    ck.set_defaults(fn=cmd_ai_check)
     r = sub.add_parser("review-all", help="Granska alla kunder i en byrå")
     r.add_argument("--org", required=True)
     r.set_defaults(fn=cmd_review_all)

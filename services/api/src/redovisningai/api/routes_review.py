@@ -621,6 +621,7 @@ def question_draft(
     return {
         "text": q or f"Hej! Vi har en fråga om följande: {case.title.lower()}. Kan du berätta mer?",
         "source": out.source,
+        "ai_note": out.to_dict()["ai_note"],
     }
 
 

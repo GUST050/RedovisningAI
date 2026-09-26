@@ -171,7 +171,7 @@ function MemoryCard({ base, write }: { base: string; write: boolean }) {
 }
 
 function MappingCard({ base, write }: { base: string; write: boolean }) {
-  const [data, setData] = useState<{ suggestions: MappingSuggestion[]; source: string } | null>(null);
+  const [data, setData] = useState<{ suggestions: MappingSuggestion[]; source: string; ai_note?: string | null } | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
   const [done, setDone] = useState<Set<number>>(new Set());
@@ -203,7 +203,7 @@ function MappingCard({ base, write }: { base: string; write: boolean }) {
         <p className="text-[13px] text-ok">Alla konton som används följer BAS-planen.</p>
       ) : (
         <>
-          <div className="mb-2"><AiBadge source={data.source === "ai" ? "ai" : "rules"} /></div>
+          <div className="mb-2 flex flex-wrap items-center gap-2"><AiBadge source={data.source === "ai" ? "ai" : "rules"} note={data.ai_note} /></div>
           <table className="data">
             <thead>
               <tr><th>Konto</th><th>Föreslagen rad</th><th>Kategori</th><th>Säkerhet</th><th></th></tr>

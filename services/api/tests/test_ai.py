@@ -11,6 +11,7 @@ from redovisningai.ai.providers.anthropic_provider import AnthropicConfig, Anthr
 from redovisningai.ai.providers.base import (
     FailoverProvider,
     ModelTier,
+    ProviderError,
     ProviderUnavailable,
     RefusalError,
     ToolBudget,
@@ -528,3 +529,21 @@ def test_rule_based_fallbacks_survive_verification() -> None:
     assert [c["text"] for c in brief.data["claims"]] == ["Bygg & Co AB: 6 allvarliga fynd."]
     ask = service.run("A5", {"question": "Varför?"}, FactStore(), org_id="o")
     assert ask.data["claims"]
+
+
+def test_rule_text_explains_why_ai_was_not_used() -> None:
+    class Broken:
+        name = "claude-anthropic"
+        region = None
+
+        def structured(self, **kwargs):  # type: ignore[no-untyped-def]
+            raise ProviderError("Claude HTTP 401: invalid x-api-key")
+
+    store = FactStore()
+    off = AIService(None).run("A1", {"accounts": []}, store, org_id="t").to_dict()
+    assert off["source"] == "rules" and "saknar nyckel" in off["ai_note"]
+    failed = AIService(Broken()).run("A1", {"accounts": []}, store, org_id="t").to_dict()  # type: ignore[arg-type]
+    assert failed["source"] == "rules"
+    assert failed["ai_note"] == "AI-anropet misslyckades: Claude HTTP 401: invalid x-api-key"
+    ok = AIService(FakeProvider()).run("A1", {"accounts": []}, store, org_id="t").to_dict()
+    assert ok["source"] == "ai" and ok["ai_note"] is None

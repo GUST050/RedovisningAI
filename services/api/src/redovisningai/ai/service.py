@@ -109,7 +109,24 @@ class AIOutcome:
             "source": self.source,
             "trace_id": self.trace.id,
             "ai_generated": self.source == "ai",
+            # Varför regeltext visas i stället för AI (t.ex. slut på budget eller fel nyckel).
+            "ai_note": _ai_note(self.trace.error) if self.source == "rules" else None,
         }
+
+
+def _ai_note(error: str | None) -> str | None:
+    if not error:
+        return None
+    if error == "AI ej konfigurerad":
+        return "AI är avstängt eller saknar nyckel (se Regler och inställningar → AI)"
+    for prefix, text in (
+        ("ProviderUnavailable: ", "AI-tjänsten var tillfälligt otillgänglig"),
+        ("RefusalError: ", "Modellen avböjde"),
+        ("ProviderError: ", "AI-anropet misslyckades"),
+    ):
+        if error.startswith(prefix):
+            return f"{text}: {error[len(prefix) :]}"[:300]
+    return error[:300]
 
 
 def _unmask(obj: Any, p: Pseudonymizer) -> Any:

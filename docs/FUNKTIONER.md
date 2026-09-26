@@ -437,6 +437,8 @@ Klick på "Konsulttjänster" visar vilka konton och verifikationer som ligger ba
 
 **Grundregel: AI är aldrig sifferfacit.** Alla belopp, summor, procent och nyckeltal räknas av programmets egen beräkningsmotor med exakt matematik.
 
+**AI är på som standard** när byrån har lagt in en nyckel till Claude (Anthropic) och/eller OpenAI på servern. Claude används först och OpenAI som reserv om Claude tillfälligt inte svarar. Under *Regler och inställningar → AI* syns vilken AI som används och hur mycket av månadsbudgeten som gått åt, och knappen *Testa AI* gör ett kort provanrop utan kunddata. Kunde AI inte användas för en text visas en regelbaserad text och orsaken (t.ex. fel nyckel eller slut på budget).
+
 **Hur det garanteras:** AI:n skriver aldrig siffror själv. Den skriver text med **platshållare** som pekar på beräknade värden, och programmet fyller i siffrorna:
 
 ```text
@@ -462,7 +464,7 @@ Om AI:n ändå försöker skriva en siffra själv underkänns texten och skrivs 
 - AI:n får bara det underlag som behövs för just den uppgiften, aldrig hela bokföringen.
 - Namn och personnummer ersätts med koder innan något skickas till AI-tjänsten.
 - Enskilda lönetransaktioner skickas aldrig, bara totaler.
-- AI-tjänsten körs inom EU, sparar inte data längre än nödvändigt och tränar inte på kundernas data.
+- Var AI:n körs beror på leverantören: via AWS Bedrock eller Google Vertex i vald EU-region; via Anthropics eller OpenAIs eget API (standard när de nycklarna används) enligt leverantörens villkor och region – Anthropics API har i dag ingen EU-inferens. Kontrollera avtal och datalokalisering innan riktiga kunddata används. Leverantörerna tränar enligt sina API-villkor inte på data som skickas, och OpenAI-anropen görs utan lagring (`store=false`).
 - Texter från bokföringen (t.ex. en verifikationstext med "ignorera alla instruktioner …") behandlas alltid som data, aldrig som instruktioner. AI-svaren kan inte visa externa bilder eller länkar, så de kan inte användas för att föra ut data.
 
 ---

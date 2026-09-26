@@ -504,3 +504,30 @@ def test_comparison_report_rejects_invalid_selection(env) -> None:  # type: igno
             url, headers=H("admin@api.se"), json={"period": "2026-09", "audience": "client", "items": [{"id": finding}]}
         )
         assert client.status_code == 422
+
+
+def test_ai_status_and_connection_check(env, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from redovisningai import config
+
+    cl = env["client"]
+    for name in ("RAI_AI_ENABLED", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    # Ny installation utan nycklar: AI används inte och sidan säger vad som saknas.
+    monkeypatch.setattr(config, "get_settings", lambda: config.Settings(_env_file=None))
+    st = cl.get("/api/ai/status", headers=H("admin@api.se")).json()
+    assert not st["enabled"] and not st["switched_off"] and st["keys"] == {"anthropic": False, "openai": False}
+    assert "ANTHROPIC_API_KEY" in st["problem"]
+
+    settings = config.Settings(_env_file=None, ai_platform="fake", ai_secondary_platform="none")
+    monkeypatch.setattr(config, "get_settings", lambda: settings)
+    st = cl.get("/api/ai/status", headers=H("admin@api.se")).json()
+    assert st["enabled"] and st["platform"] == "fake" and st["problem"] is None
+    assert [(p["role"], p["ready"]) for p in st["providers"]] == [("primär", True)]
+
+    assert cl.post("/api/ai/check", headers=H("kalle@api.se")).status_code == 403
+    r = cl.post("/api/ai/check", headers=H("admin@api.se")).json()
+    assert r["ok"] and [c["ok"] for c in r["results"][0]["checks"]] == [True, True]
+    after = cl.get("/api/ai/status", headers=H("admin@api.se")).json()
+    assert after["tokens_used_this_month"] > st["tokens_used_this_month"]
+    audit = cl.get("/api/audit", headers=H("admin@api.se")).json()
+    assert any(e["action"] == "ai.check" and e["details"]["ok"] for e in audit)

@@ -22,6 +22,11 @@ const nextConfig: NextConfig = {
   // Fristående server för containern (apps/web/Dockerfile). RAI_API_URL läses vid bygget.
   output: "standalone",
   poweredByHeader: false,
+  experimental: {
+    // /api proxas till API:t. Standardgränsen är 30 s, men ett AI-svar (Claude/OpenAI med
+    // resonemang och läsverktyg) kan ta flera minuter – annars avbryts det mitt i.
+    proxyTimeout: 600_000,
+  },
   async rewrites() {
     return [{ source: "/api/:path*", destination: `${api}/api/:path*` }];
   },

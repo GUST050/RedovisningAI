@@ -718,7 +718,7 @@ def mapping_suggestions(company_id: uuid.UUID, principal: Principal = Depends(ge
         company_id=str(company_id),
         names_to_mask=a.ctx.person_names,
     )
-    return {**out.data, "source": out.source}
+    return {**out.data, "source": out.source, "ai_note": out.to_dict()["ai_note"]}
 
 
 @router.post("/mapping")

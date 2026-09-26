@@ -52,12 +52,51 @@ class AnthropicConfig:
     refusal_fallback_model: str | None = "claude-opus-4-8"
     timeout_s: float = 120.0
     max_retries: int = 2
+    # Bara för plattformen "anthropic". Anges alltid uttryckligen av fabriken, så att klienten inte
+    # läser nyckel eller adress (ANTHROPIC_BASE_URL) från processens miljö.
+    api_key: str | None = None
+    base_url: str | None = None
 
 
 def _platform_model(platform: str, model: str) -> str:
     if platform == "bedrock" and not model.startswith("anthropic."):
         return f"anthropic.{model}"
     return model
+
+
+def _api_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """JSON-schema i den delmängd som strukturerad output och strikta verktyg stöder.
+
+    T.ex. `maxItems` avvisas av API:t; SDK:ns transform_schema flyttar sådana villkor till
+    beskrivningen. Gränsen upprätthålls i stället av `_trim_to_schema` efter svaret.
+    """
+    from anthropic import transform_schema
+
+    try:
+        return transform_schema(schema)
+    except ValueError:  # t.ex. ett tomt schema: skickas oförändrat, som tidigare
+        return schema
+
+
+def _error_message(exc: Any) -> str:
+    """API:ts eget felmeddelande (t.ex. "API key is invalid."), utan kringliggande JSON."""
+    body = getattr(exc, "body", None)
+    error = body.get("error") if isinstance(body, dict) else None
+    message = error.get("message") if isinstance(error, dict) else None
+    return str(message or getattr(exc, "message", "") or type(exc).__name__)[:300]
+
+
+def _trim_to_schema(value: Any, schema: dict[str, Any]) -> Any:
+    """Korta listor till schemats `maxItems` (som API:t inte själv kan tvinga fram)."""
+    if isinstance(value, dict) and isinstance(schema.get("properties"), dict):
+        props = schema["properties"]
+        return {k: _trim_to_schema(v, props[k]) if k in props else v for k, v in value.items()}
+    if isinstance(value, list):
+        items = schema.get("items") if isinstance(schema.get("items"), dict) else {}
+        limit = schema.get("maxItems")
+        trimmed = value[:limit] if isinstance(limit, int) else value
+        return [_trim_to_schema(v, items) for v in trimmed]
+    return value
 
 
 class AnthropicProvider:
@@ -94,7 +133,7 @@ class AnthropicProvider:
                 project_id=c.project_id, region=c.region, middleware=middleware or None, **common
             )
         if c.platform == "anthropic":
-            return anthropic.Anthropic(**common)
+            return anthropic.Anthropic(api_key=c.api_key, base_url=c.base_url, **common)
         raise ProviderError(f"Okänd plattform {c.platform!r}")
 
     # ------------------------------------------------------------------ hjälp
@@ -107,7 +146,7 @@ class AnthropicProvider:
             "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
             "output_config": {
                 "effort": c.effort.get(tier, "high"),
-                "format": {"type": "json_schema", "schema": schema},
+                "format": {"type": "json_schema", "schema": _api_schema(schema)},
             },
         }
         if c.platform == "anthropic" and c.refusal_fallback_model:
@@ -129,7 +168,7 @@ class AnthropicProvider:
         except anthropic.APIStatusError as exc:
             if exc.status_code >= 500 or exc.status_code == 529:
                 raise ProviderUnavailable(str(exc)) from exc
-            raise ProviderError(f"{exc.status_code}: {exc.message}") from exc
+            raise ProviderError(f"Claude HTTP {exc.status_code}: {_error_message(exc)}") from exc
 
     @staticmethod
     def _usage(resp: Any) -> Usage:
@@ -179,7 +218,7 @@ class AnthropicProvider:
         resp = self._create(params)
         self._check_stop(resp)
         return StructuredResult(
-            data=self._json_text(resp),
+            data=_trim_to_schema(self._json_text(resp), schema),
             usage=self._usage(resp),
             provider=self.name,
             model=getattr(resp, "model", params["model"]),
@@ -201,7 +240,7 @@ class AnthropicProvider:
         """Manuell verktygsloop med budget. Verktygen är läsverktyg med servern som grind."""
         params = self._request_base(tier, system, schema, max_tokens)
         params["tools"] = [
-            {"name": t.name, "description": t.description, "input_schema": t.input_schema, "strict": True}
+            {"name": t.name, "description": t.description, "input_schema": _api_schema(t.input_schema), "strict": True}
             for t in tools
         ]
         handlers = {t.name: t for t in tools}
@@ -218,7 +257,7 @@ class AnthropicProvider:
             self._check_stop(resp)
             if resp.stop_reason != "tool_use":
                 return StructuredResult(
-                    data=self._json_text(resp),
+                    data=_trim_to_schema(self._json_text(resp), schema),
                     usage=usage,
                     provider=self.name,
                     model=getattr(resp, "model", params["model"]),

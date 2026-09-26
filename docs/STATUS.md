@@ -26,7 +26,7 @@ Teckenförklaring: ✅ klart och testat · 🟡 delvis · ⏳ inte byggt ännu �
 | 10 | 25 kontroller, bokslutsmönster, fyndens livscykel, undertryckning, precision | ✅ | `rules/controls.py`, `findings/lifecycle.py`, sidan *Regelhälsa* |
 | 11 | Kundvy med drilldown och Excel-export | ✅ | `apps/web/app/clients/[id]` |
 | 12 | Portföljvy med prioriteringspoäng och kopplingshälsa | ✅ | `portfolio/score.py`, startsidan. Filter per system (inte per konsult ännu). |
-| 13 | A1 + A2 (ärendebyggare), kundminne, verifierare, evals, EU-leverantör med failover | ✅ | `ai/`, `cases/builder.py`, `memory/`. 👤 Evals mot riktig modell kräver nycklar till Bedrock/Vertex i EU-region. |
+| 13 | A1 + A2 (ärendebyggare), kundminne, verifierare, evals, EU-leverantör med failover | ✅ | `ai/`, `cases/builder.py`, `memory/`. 👤 Evals mot riktig modell: `./scripts/test-ai.sh --eval` med nycklarna i `.env`. |
 
 ## Fas 3 – Rådgivning, rapport, härdning
 
@@ -53,6 +53,15 @@ Teckenförklaring: ✅ klart och testat · 🟡 delvis · ⏳ inte byggt ännu �
 | Viktigaste skillnaderna: deterministisk rangordning med redovisade poäng, högst ett förslag per område | ✅ | `analytics/differences.py`, `GET /report-items` |
 | Rapport av valda skillnader och jämförelser (intern eller kund, PDF/Word/Excel) med kommentarer | ✅ | `reports/comparison_report.py`, `POST /reports/comparison`, fliken *Jämförelse & rapport*, `redovisningai compare`. Urvalet valideras mot serverns egna poster; kundrapporten saknar analysfynd, verifikationer och enskilda lönekonton. |
 
+## AI som standard (2026-09-26)
+
+| Del | Status | Var |
+|---|---|---|
+| AI på så fort `ANTHROPIC_API_KEY` och/eller `OPENAI_API_KEY` finns; Claude först, OpenAI som reserv; full drift med byråns månadsbudget | ✅ | `config.py` (`ai_platforms`), `ai/factory.py`, `.env.example`, `docker-compose.yml`. En äldre `.env` uppgraderas en gång av `scripts/start-mac.sh` (med kopia). |
+| Testa AI utan kunddata: JSON-svar och läsverktyg per leverantör | ✅ | *Regler och inställningar → AI → Testa AI*, `POST /api/ai/check`, `redovisningai ai-check`/`ai-status`, `scripts/test-ai.sh`. 👤 Provat mot SDK:erna med simulerade svar; riktiga nycklar provas hos dig. |
+| Rättat för riktiga anrop: scheman i Claudes format (`maxItems` avvisades), krypterat resonemang i OpenAIs verktygsloop (`store=false`), webbproxyns tidsgräns 30 s → 10 min, nyckel och adress till Claude sätts uttryckligen | ✅ | `ai/providers/`, `apps/web/next.config.ts` |
+| Orsaken visas när regeltext används i stället för AI | ✅ | `ai_note` i AI-svaren, märkningen *Regelbaserad text* |
+
 ## Fas 4 – V1.5
 
 | Del | Status | Kommentar |
@@ -77,7 +86,7 @@ BankID, prognoser. Inloggning via OIDC finns (fungerar med Entra ID). 👤 ISO 2
 | Siffror renderas av servern, AI använder fakta-id (§9.2) | ✅ Verifieraren avvisar egna tal, okända fakta-id och orsakspåståenden utan stöd. |
 | Dataminimering och pseudonymisering (§9.4) | ✅ Personnamn maskeras, lönerader och PTL skickas aldrig till AI (testat). |
 | Prompt injection och exfiltration (§9.5) | ✅ Data kapslas in som data, länkar och bilder blockeras i AI-text, AI-text visas som ren text, strikt CSP. |
-| Leverantörer, regioner, kostnadstak (§9.6) | ✅ Bedrock/Vertex/Anthropic, failover, tokenbudget per byrå och månad, reservmodell vid avböjt svar. |
+| Leverantörer, regioner, kostnadstak (§9.6) | ✅ På som standard med nycklar: Claude (Anthropic) först, OpenAI som reserv. Bedrock/Vertex för EU-region, tokenbudget per byrå och månad, reservmodell vid avböjt svar. 👤 Anthropics och OpenAIs egna API:er är inte EU-inferens – avtal och datalokalisering måste bedömas före riktiga kunddata. |
 | AI-förordningen art. 50 (§11.4) | ✅ Märkning *AI-genererad* eller *Regelbaserad text* överallt där text visas. |
 | Retention (§11.8) | ✅ Jobb som rensar AI-spår (30 dagar) och källfiler (konfigurerbart). |
 | Break-glass för support (§11.9) | ⏳ |
@@ -86,7 +95,7 @@ BankID, prognoser. Inloggning via OIDC finns (fungerar med Entra ID). 👤 ISO 2
 
 ## Testning (§12)
 
-- 272 automatiska tester (2026-09-26; 2 kräver PgBouncer och hoppas över lokalt utan den):
+- 285 automatiska tester (2026-09-26; 2 kräver PgBouncer och hoppas över lokalt utan den):
   standardformatets rundresa, CSV/Excel-layouter, uppbyggnad över tid, rangordning och rapporter,
   samt tidigare parser (inkl. CP437, #RTRANS/#BTRANS, brutna räkenskapsår), golden
   tests för RR/BR, regler med datumgränsfall, fyndlivscykel, AI-verifierare och

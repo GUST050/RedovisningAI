@@ -9,6 +9,7 @@ type Answer = {
   question: string;
   claims: Claim[];
   source: string;
+  ai_note?: string | null;
   tool_calls: { tool: string; input: Record<string, unknown> }[];
 };
 
@@ -29,9 +30,9 @@ export function AnalystTab() {
   const ask = (q: string) => {
     setBusy(true);
     setErr(null);
-    send<{ data: { claims: Claim[] }; source: string; tool_calls: Answer["tool_calls"] }>(`${base}/ask`, "POST", { question: q, period: spec })
+    send<{ data: { claims: Claim[] }; source: string; ai_note?: string | null; tool_calls: Answer["tool_calls"] }>(`${base}/ask`, "POST", { question: q, period: spec })
       .then((r) => {
-        setHistory((h) => [{ question: q, claims: r.data.claims, source: r.source, tool_calls: r.tool_calls ?? [] }, ...h]);
+        setHistory((h) => [{ question: q, claims: r.data.claims, source: r.source, ai_note: r.ai_note, tool_calls: r.tool_calls ?? [] }, ...h]);
         setQuestion("");
       })
       .catch(setErr)
@@ -68,7 +69,7 @@ export function AnalystTab() {
         <Card
           key={history.length - i}
           title={a.question}
-          actions={<AiBadge source={a.source === "ai" ? "ai" : "rules"} />}
+          actions={<AiBadge source={a.source === "ai" ? "ai" : "rules"} note={a.ai_note} />}
         >
           {a.source === "ai" ? <Claims claims={a.claims} /> : <p>{a.claims.map((c) => c.rendered ?? c.text).join(" ")}</p>}
           {a.tool_calls.length > 0 && (

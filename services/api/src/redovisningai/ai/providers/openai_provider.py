@@ -30,6 +30,16 @@ def _openai_schema(value: Any) -> Any:
     return value
 
 
+def _error_message(exc: Any) -> str:
+    """API:ts eget felmeddelande (t.ex. "The model … does not exist."), utan kringliggande JSON."""
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        inner = body.get("error") if isinstance(body.get("error"), dict) else body
+        if inner.get("message"):
+            return str(inner["message"])[:300]
+    return str(getattr(exc, "message", "") or type(exc).__name__)[:300]
+
+
 @dataclass(slots=True)
 class OpenAIConfig:
     api_key: str | None
@@ -79,7 +89,8 @@ class OpenAIProvider:
             if isinstance(exc, self._sdk.APIStatusError):
                 if exc.status_code >= 500:
                     raise ProviderUnavailable(f"OpenAI HTTP {exc.status_code}") from exc
-                raise ProviderError(f"OpenAI HTTP {exc.status_code}") from exc
+                # T.ex. fel nyckel eller okänd modell. OpenAIs felmeddelande innehåller inga kunddata.
+                raise ProviderError(f"OpenAI HTTP {exc.status_code}: {_error_message(exc)}") from exc
             if isinstance(exc, self._sdk.APIError):
                 raise ProviderError(f"OpenAI-anropet misslyckades ({type(exc).__name__})") from exc
             raise
@@ -123,7 +134,8 @@ class OpenAIProvider:
         ):
             raise RefusalError("OpenAI avböjde svaret")
         if getattr(response, "status", None) != "completed":
-            raise ProviderError("OpenAI gav ett ofullständigt svar")
+            reason = getattr(getattr(response, "incomplete_details", None), "reason", None)
+            raise ProviderError(f"OpenAI gav ett ofullständigt svar ({reason or response.status})")
         raw = getattr(response, "output_text", None)
         if not raw:
             raise ProviderError("OpenAI gav inget textsvar")
@@ -164,6 +176,9 @@ class OpenAIProvider:
     ) -> StructuredResult:
         req = self._request(task, tier, system, schema, max_tokens)
         req["input"].append({"role": "user", "content": user_content})
+        # Med store=False sparar OpenAI inget mellan anropen. Modellens resonemang skickas då med
+        # tillbaka i krypterad form; annars avvisas nästa anrop i verktygsloopen.
+        req["include"] = ["reasoning.encrypted_content"]
         req["tools"] = [
             {
                 "type": "function",

@@ -240,7 +240,7 @@ function DecisionModal({ c, status, base, onClose, onDone }: { c: Case; status: 
 }
 
 function AskClientModal({ c, base, onClose, onDone }: { c: Case; base: string; onClose: () => void; onDone: () => void }) {
-  const draft = useLoad<{ text: string; source: string }>(`${base}/cases/${c.key}/question-draft`);
+  const draft = useLoad<{ text: string; source: string; ai_note?: string | null }>(`${base}/cases/${c.key}/question-draft`);
   const [text, setText] = useState<string | null>(null);
   const [email, setEmail] = useState("");
   const [link, setLink] = useState<string | null>(null);
@@ -293,7 +293,7 @@ function AskClientModal({ c, base, onClose, onDone }: { c: Case; base: string; o
             </Field>
             {draft.data && (
               <div className="flex items-center gap-2 text-[12px] text-muted">
-                Utkast: <AiBadge source={draft.data.source === "ai" ? "ai" : "rules"} /> Granska och redigera innan du skickar.
+                Utkast: <AiBadge source={draft.data.source === "ai" ? "ai" : "rules"} note={draft.data.ai_note} /> Granska och redigera innan du skickar.
               </div>
             )}
             <Field label="Kundens e-post (valfritt, för påminnelser)">

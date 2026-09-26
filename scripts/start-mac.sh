@@ -73,6 +73,25 @@ else
   ok ".env finns redan"
 fi
 
+# ------------------------------------------------------------------ 3b. AI som standard
+# Äldre .env (från mallen före 2026-09-26) hade AI avstängt, Bedrock som plattform och testläge.
+# Finns en Anthropic- eller OpenAI-nyckel i filen görs AI till standard – en gång och med en
+# kopia av den gamla filen. Egna ändringar efteråt ligger kvar (raden "# ai-standard: 2").
+has_ai_key() { grep -Eq '^(ANTHROPIC_API_KEY|OPENAI_API_KEY)=[^[:space:]#]' .env; }
+if ! grep -q '^# ai-standard: 2' .env && has_ai_key; then
+  backup=".env.backup-$(date +%Y%m%d-%H%M%S)"
+  cp .env "$backup"
+  sed -i '' \
+    -e 's|^RAI_AI_ENABLED=false[[:space:]]*$|RAI_AI_ENABLED=auto|' \
+    -e 's|^RAI_AI_TEST_MODE=true[[:space:]]*$|RAI_AI_TEST_MODE=false|' \
+    .env
+  if ! grep -Eq '^AWS_ACCESS_KEY_ID=[^[:space:]#]' .env; then
+    sed -i '' -e 's|^RAI_AI_PLATFORM=bedrock[[:space:]]*$|RAI_AI_PLATFORM=auto|' .env
+  fi
+  printf '\n# ai-standard: 2 (AI på som standard – stäng av med RAI_AI_ENABLED=false)\n' >> .env
+  ok "AI är nu standard med nycklarna i .env (den gamla filen sparades som $backup)"
+fi
+
 # ------------------------------------------------------------------ 4. Bygg och starta
 free_gb=$(df -g "$HOME" | awk 'NR==2 {print $4}')
 # För lite ledigt utrymme gör att Dockers virtuella disk blir skrivskyddad mitt i bygget
@@ -160,12 +179,22 @@ curl -fsS http://localhost:3000/login >/dev/null 2>&1 || {
   fail "Webben svarar inte. Klistra in utskriften ovan i chatten."
 }
 
+# ------------------------------------------------------------------ 6. AI
+if has_ai_key; then
+  say "Testar AI-nycklarna (kort provanrop utan kunddata)"
+  docker compose run --rm --no-deps api redovisningai ai-check --quick ||
+    echo "AI fungerar inte fullt ut – se raderna ovan. Programmet fungerar ändå, med regelbaserade texter."
+else
+  echo "AI: ingen nyckel i .env. Lägg till ANTHROPIC_API_KEY och/eller OPENAI_API_KEY och kör skriptet igen."
+fi
+
 ok "Klart!"
 cat <<'TXT'
 
   Öppnar http://localhost:3000 – du är automatiskt inloggad som anna@demobyran.se (byråadmin).
 
   Egen SIE-fil:  Lägg till kund på startsidan → fliken Data → dra in filen.
+  Testa AI:n:    ./scripts/test-ai.sh   (eller Regler och inställningar → AI → Testa AI)
   Stoppa:        docker compose down        (datan sparas)
   Starta igen:   ./scripts/start-mac.sh
   Radera allt:   docker compose down -v

@@ -624,28 +624,47 @@ def audit_log(company_id: uuid.UUID | None = None, limit: int = 200, s: Session 
 
 @admin.get("/ai/status")
 def ai_status(principal: Principal = Depends(get_principal), s: Session = Depends(db)) -> dict[str, Any]:
-    from redovisningai.ai.factory import build_provider
+    from redovisningai.ai.factory import PLATFORM_LABELS, configured_providers, platform_models
     from redovisningai.config import get_settings
 
     st = get_settings()
     month = datetime.now().strftime("%Y-%m")
     used = s.scalar(select(m.AIUsage.tokens).where(m.AIUsage.month == month)) or 0
     org = s.get(m.Organization, principal.org_id)
-    models = (
-        {"strong": st.openai_model_strong, "medium": st.openai_model_medium, "small": st.openai_model_small}
-        if st.ai_platform == "openai"
-        else {"strong": st.ai_model_strong, "medium": st.ai_model_medium, "small": st.ai_model_small}
-    )
+    primary, _ = st.ai_platforms()
+    providers = configured_providers(st) if st.ai_requested else []
+    active = [p for p in providers if p.provider is not None]
+    problem = None
+    if st.ai_enabled is not False and primary is None:
+        problem = "Ingen AI-nyckel hittades. Lägg ANTHROPIC_API_KEY och/eller OPENAI_API_KEY i .env och starta om."
+    elif st.ai_requested and not active:
+        problem = "; ".join(p.problem for p in providers if p.problem) or "AI kunde inte startas"
+    platform = active[0].platform if active else primary
     monthly_budget = org.ai_monthly_token_budget if org else None
     if st.ai_test_mode and monthly_budget is not None:
         monthly_budget = min(monthly_budget, st.ai_test_monthly_token_cap)
     return {
-        "enabled": build_provider(st) is not None,
-        "requested": st.ai_enabled,
-        "platform": st.ai_platform,
-        "region": st.ai_region if st.ai_platform in {"bedrock", "vertex"} else None,
-        "secondary": st.ai_secondary_platform if not st.ai_test_mode else None,
-        "models": models,
+        "enabled": bool(active),
+        "requested": st.ai_requested,
+        "switched_off": st.ai_enabled is False,
+        "problem": problem,
+        "platform": platform,
+        "region": st.ai_region if platform in {"bedrock", "vertex"} else None,
+        "secondary": active[1].platform if len(active) > 1 else None,
+        "models": platform_models(platform, st),
+        "providers": [
+            {
+                "role": p.role,
+                "platform": p.platform,
+                "label": PLATFORM_LABELS.get(p.platform, p.platform),
+                "models": platform_models(p.platform, st),
+                "ready": p.provider is not None,
+                "problem": p.problem,
+            }
+            for p in providers
+        ],
+        # Bara om nycklarna finns – aldrig själva värdena.
+        "keys": {"anthropic": bool(st.anthropic_api_key), "openai": bool(st.openai_api_key)},
         "tokens_used_this_month": used,
         "monthly_budget": monthly_budget,
         "test_mode": st.ai_test_mode,
@@ -653,6 +672,30 @@ def ai_status(principal: Principal = Depends(get_principal), s: Session = Depend
         "test_max_tool_calls": st.ai_test_max_tool_calls if st.ai_test_mode else None,
         "notice": "AI-genererade texter märks i gränssnittet (AI Act art. 50) och granskas av konsulten.",
     }
+
+
+@admin.post("/ai/check")
+def ai_check(principal: Principal = Depends(require_admin), s: Session = Depends(db)) -> dict[str, Any]:
+    """Provanrop till varje konfigurerad AI-leverantör (inga kunddata skickas)."""
+    from redovisningai.ai.factory import DbBudget, check_providers
+    from redovisningai.ai.providers.base import Usage
+    from redovisningai.config import get_settings
+
+    st = get_settings()
+    results = check_providers(st) if st.ai_requested else []
+    tokens = sum(c.get("tokens", 0) for r in results for c in r["checks"])
+    if tokens:
+        # Provanropen räknas in i byråns förbrukning precis som andra AI-anrop.
+        DbBudget(principal.org_id).record(str(principal.org_id), "CHECK", Usage(input_tokens=tokens))
+    repo.audit(
+        s,
+        principal.ctx,
+        "ai.check",
+        None,
+        providers=[r["platform"] for r in results],
+        ok=all(r["ok"] for r in results) if results else False,
+    )
+    return {"results": results, "ok": bool(results) and all(r["ok"] for r in results)}
 
 
 class WatchIn(BaseModel):

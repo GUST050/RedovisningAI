@@ -6,7 +6,7 @@ import { ApiError, type Claim, send, useLoad } from "@/lib/api";
 import { dateTime, monthLabel } from "@/lib/format";
 import { useClient } from "./shared";
 
-type AiDoc<T> = { task: string; data: T; source: string; created_at?: string; by?: string; approved?: boolean; edited_by?: string; stale?: boolean; compare_period?: string };
+type AiDoc<T> = { task: string; data: T; source: string; ai_note?: string | null; created_at?: string; by?: string; approved?: boolean; edited_by?: string; stale?: boolean; compare_period?: string };
 type Meeting = { summary: Claim[]; questions: Claim[]; case_questions?: { case_key: string; question: string }[] };
 type DecisionDraft = { decision: "approve" | "reject" | "correct" | ""; reason: string; corrected_text: string };
 
@@ -81,7 +81,7 @@ export function ReportsTab() {
           <div className="space-y-2">
             {d.commentary.stale && <p className="rounded bg-medium-soft px-3 py-2 text-[12px] text-medium">Kommentaren bygger på ändrad bokföring, jämförelse eller promptversion och är inaktuell. Skapa en ny innan den används.</p>}
             <div className="flex items-center gap-2 text-[12px] text-muted">
-              <AiBadge source={d.commentary.source === "ai" ? "ai" : "rules"} />
+              <AiBadge source={d.commentary.source === "ai" ? "ai" : "rules"} note={d.commentary.ai_note} />
               {d.commentary.created_at && <span>{dateTime(d.commentary.created_at)} · {d.commentary.by}{d.commentary.compare_period ? ` · jämför med ${monthLabel(d.commentary.compare_period)}` : ""}</span>}
             </div>
             <Claims claims={d.commentary.data.claims} />
@@ -240,7 +240,7 @@ function MeetingCard({ d, busy, onGenerate, onSaved }: { d: PeriodDetail; busy: 
       ) : (
         <div className="space-y-3">
           <div className="flex flex-wrap items-center gap-2 text-[12px] text-muted">
-            <AiBadge source={report.source === "ai" ? "ai" : "rules"} />
+            <AiBadge source={report.source === "ai" ? "ai" : "rules"} note={report.ai_note} />
             {report.edited_by && <span>Redigerad av {report.edited_by}</span>}
             {report.approved ? <StatusBadge status="APPROVED" /> : <span className="text-medium">Utkast – inte godkänt</span>}
           </div>
