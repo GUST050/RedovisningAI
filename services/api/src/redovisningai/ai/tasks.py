@@ -30,8 +30,11 @@ Regler som alltid gäller:
 
 # Bump these whenever the corresponding prompt/schema semantics change. The value
 # is persisted with generated drafts and participates in their staleness checks.
-A3_PROMPT_VERSION = "A3-v2"
+A3_PROMPT_VERSION = "A3-v3"
 A4_PROMPT_VERSION = "A4-v1"
+# Radnamnen i resultat- och balansräkningen är fasta (ÅRL/BAS) och aldrig kundens fritext.
+LINE_LABELS = {ln.code: ln.label for ln in INCOME_LINES + BALANCE_LINES}
+
 A3_FINDING_LABELS = {
     "recurring_cost_change": "förändring i återkommande kostnad",
     "transaction_frequency_change": "ändrad verifikationsfrekvens",
@@ -65,9 +68,9 @@ def period_commentary_input(package: dict[str, Any]) -> dict[str, Any]:
         components.append(
             {
                 "code": str(component.get("code", "")),
-                # Category labels can be customer-configured free text; use
-                # stable codes in the provider payload instead.
-                "label": str(component.get("code", "")),
+                # Category labels can be customer-configured free text; only
+                # the fixed statement line names are sent, otherwise the code.
+                "label": LINE_LABELS.get(str(component.get("code", "")), str(component.get("code", ""))),
                 "effect": component.get("effect"),
                 "fact_id": str(fact_id),
                 "source_level": "aggregated_account_bridge",

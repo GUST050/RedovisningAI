@@ -96,3 +96,14 @@ def test_analyze_accepts_csv_together_with_sie(files: dict[str, Path], capsys: p
     assert main(["analyze", str(files["2025"]), str(files["csv"]), "--period", "2026-09", "--out", str(out_dir)]) == 0
     assert any(p.suffix == ".xlsx" for p in out_dir.iterdir())
     assert "ärenden" in capsys.readouterr().out
+
+
+def test_eval_accepts_openai_and_reports_missing_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    import redovisningai.config as config
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("RAI_OPENAI_API_KEY", raising=False)
+    # Ingen .env: testet får aldrig råka anropa en riktig leverantör.
+    monkeypatch.setattr(config, "get_settings", lambda: config.Settings(_env_file=None))
+    with pytest.raises(SystemExit, match="AI kunde inte konfigureras: OpenAI kräver OPENAI_API_KEY"):
+        main(["eval", "--provider", "openai"])

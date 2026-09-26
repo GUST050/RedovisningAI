@@ -175,7 +175,8 @@ flera modellbegäranden. Automatisk reservleverantör är avstängd i testläget
 egen utvärdering. Tokenbudgeten mäts efter ett svar och är därför **inte** ett absolut
 kostnadstak vid samtidiga anrop. Sätt också projektets utgiftsgräns hos leverantören.
 Testa först på syntetiska SIE-filer; en API-nyckel innebär inte att data skickas förrän AI
-aktiveras och en AI-funktion körs.
+aktiveras och en AI-funktion körs. `redovisningai eval --provider openai` (eller `anthropic`,
+`bedrock`, `vertex`) kör AI-evalsen mot den riktiga leverantören på syntetiska demobolag.
 
 `RAI_AI_SECONDARY_PLATFORM` ger failover i full drift. Personnamn maskeras innan anrop, lönerader och
 PTL-signaler skickas aldrig och varje påstående kontrolleras mot beräknade fakta innan det visas.

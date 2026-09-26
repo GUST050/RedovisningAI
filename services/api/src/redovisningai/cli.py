@@ -7,7 +7,7 @@ redovisningai demo-sie --out demo/                           # skriv demobolagen
 redovisningai migrate                                        # kör databasmigrationer (ägarroll)
 redovisningai create-org "Byrån AB" --admin-email a@b.se --admin-name "Anna"
 redovisningai seed-demo                                      # demobyrå med fyra kunder
-redovisningai eval --provider fake|bedrock|vertex|anthropic  # AI-evals
+redovisningai eval --provider fake|bedrock|vertex|anthropic|openai  # AI-evals
 redovisningai review-all --org <uuid>                        # granska alla kunder i en byrå
 """
 
@@ -20,6 +20,9 @@ import sys
 import uuid
 from datetime import date
 from pathlib import Path
+
+# Samma plattformar som RAI_AI_PLATFORM (ai/factory.py).
+AI_PLATFORMS = ["fake", "bedrock", "vertex", "anthropic", "openai"]
 
 
 def cmd_analyze(args: argparse.Namespace) -> int:
@@ -237,10 +240,14 @@ def _render(f: dict[str, object]) -> str:
 
 def _provider(name: str):  # type: ignore[no-untyped-def]
     from redovisningai.ai.factory import _provider as make
+    from redovisningai.ai.providers.base import ProviderError
     from redovisningai.config import get_settings
 
     s = get_settings()
-    return make(name, s.ai_region, s)
+    try:
+        return make(name, s.ai_region, s)
+    except ProviderError as exc:
+        raise SystemExit(f"AI kunde inte konfigureras: {exc}") from exc
 
 
 def cmd_demo_sie(args: argparse.Namespace) -> int:
@@ -363,7 +370,7 @@ def main(argv: list[str] | None = None) -> int:
     a.add_argument("--legal-form", default="AB")
     a.add_argument("--food-retail", action="store_true")
     a.add_argument("--firm", default="Redovisningsbyrån")
-    a.add_argument("--ai", choices=["fake", "bedrock", "vertex", "anthropic"])
+    a.add_argument("--ai", choices=AI_PLATFORMS)
     a.add_argument("--include-aml", action="store_true", help="Ta med PTL-signaler (bara för PTL-ansvarig)")
     a.add_argument("--fiscal-year-start", type=int, help="Räkenskapsårets startmånad för CSV/Excel (standard: 1)")
     a.set_defaults(fn=cmd_analyze)
@@ -415,7 +422,7 @@ def main(argv: list[str] | None = None) -> int:
     sd.add_argument("--as-of", default="2026-10-12")
     sd.set_defaults(fn=cmd_seed_demo)
     e = sub.add_parser("eval", help="Kör AI-evals")
-    e.add_argument("--provider", default="fake", choices=["fake", "bedrock", "vertex", "anthropic"])
+    e.add_argument("--provider", default="fake", choices=AI_PLATFORMS)
     e.set_defaults(fn=cmd_eval)
     r = sub.add_parser("review-all", help="Granska alla kunder i en byrå")
     r.add_argument("--org", required=True)

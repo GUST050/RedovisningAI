@@ -18,7 +18,7 @@ from redovisningai.ai.providers.base import (
 )
 from redovisningai.ai.pseudonymize import Pseudonymizer, luhn_ok
 from redovisningai.ai.service import AIService, FakeProvider
-from redovisningai.ai.tasks import period_commentary_input
+from redovisningai.ai.tasks import LINE_LABELS, period_commentary_input
 from redovisningai.ai.tools import analyst_tools
 from redovisningai.ai.verifier import find_literal_numbers, verify_claims
 from redovisningai.devdata.generator import DEMO_PROFILES, generate
@@ -45,7 +45,13 @@ def test_a3_provider_payload_is_restricted_to_approved_aggregates() -> None:
                     "label": "Kundens fria etikett Olofsson",
                     "effect": "-5000",
                     "fact_id": "cost_789",
-                }
+                },
+                {
+                    "code": "custom_group",
+                    "label": "Kundens egen grupp Olofsson",
+                    "effect": "-100",
+                    "fact_id": "cost_789",
+                },
             ]
         },
         "maturity": {"low_periodization": False, "recommended_view": "month", "notes": ["Do not send"]},
@@ -122,6 +128,8 @@ def test_a3_provider_payload_is_restricted_to_approved_aggregates() -> None:
         {"id": "candidate_222", "value": "5000", "unit": "SEK", "status": "PARTIAL", "period": "2026-09"},
     ]
     assert projected["bridge"]["components"][0]["source_level"] == "aggregated_account_bridge"
+    # Fasta radnamn ersätter kundens etikett; okända koder skickas som kod.
+    assert [c["label"] for c in projected["bridge"]["components"]] == ["Personalkostnader", "custom_group"]
     assert projected["findings"][0]["accounts"] == [6540]
     assert projected["findings"][0]["evidence_count"] == 3
     assert projected["findings"][0]["label"] == "förändring i återkommande kostnad"
@@ -138,6 +146,24 @@ def test_a3_provider_payload_is_restricted_to_approved_aggregates() -> None:
         "2710",
     ):
         assert forbidden not in serialized
+
+
+def test_a3_rule_text_names_statement_lines_not_codes() -> None:
+    """Regelbaserad periodkommentar (AI avstängt) på samma avgränsade underlag som API:t skickar."""
+    profile = DEMO_PROFILES[0]
+    g = generate(profile, date(2026, 9, 26))
+    an = CompanyAnalysis(
+        g.ledger, CompanyContext("t", "t", g.ledger.company_name, CompanySettings(vat_period=profile.vat_period))
+    )
+    rev = an.review(an.period("2026-09"))
+    projected = period_commentary_input(an.commentary_package(rev))
+    allowed = {str(f["id"]) for f in projected["facts"]}
+    out = AIService(None).run("A3", projected, rev.store, org_id="t", allowed_identifiers=allowed)
+    texts = [c["rendered"] for c in out.data["claims"]]
+    explanations = [c["rendered"] for c in out.data["claims"] if c["type"] == "EXPLANATION"]
+    assert explanations
+    assert all(text.startswith(tuple(LINE_LABELS.values())) for text in explanations)
+    assert not [word for text in texts for word in text.split() if "_" in word]
 
 
 def test_ai_trace_redacts_payload_output_rejection_text_and_tool_arguments() -> None:

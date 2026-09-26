@@ -86,14 +86,14 @@ BankID, prognoser. Inloggning via OIDC finns (fungerar med Entra ID). 👤 ISO 2
 
 ## Testning (§12)
 
-- 270 automatiska tester (2026-09-26; 2 kräver PgBouncer och hoppas över lokalt utan den):
+- 272 automatiska tester (2026-09-26; 2 kräver PgBouncer och hoppas över lokalt utan den):
   standardformatets rundresa, CSV/Excel-layouter, uppbyggnad över tid, rangordning och rapporter,
   samt tidigare parser (inkl. CP437, #RTRANS/#BTRANS, brutna räkenskapsår), golden
   tests för RR/BR, regler med datumgränsfall, fyndlivscykel, AI-verifierare och
   pseudonymisering, RLS (byrå/kund/lön/PTL/läsare/publik länk), PgBouncer-läckagetest, API och
   kopplingar.
 - AI-evals: `redovisningai eval` (sifferfel, avvisade påståenden, läckage till kundtext,
-  mappningsträffsäkerhet).
+  mappningsträffsäkerhet). Mot riktig modell: `--provider anthropic|openai|bedrock|vertex`.
 - Webben: end-to-end i webbläsare (portfölj, alla flikar, kundfråga med svar via publik länk,
   beslut, godkännande med motivering, rapportnedladdning, SIE-uppladdning, läsarbehörighet).
 - 👤 SIE-korpus med riktiga filer från fler exportörer (Spiris, BL, Hogia, Bokio) behövs från
