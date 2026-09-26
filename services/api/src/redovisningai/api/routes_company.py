@@ -12,6 +12,7 @@ from decimal import Decimal
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import RedirectResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
@@ -40,6 +41,7 @@ from redovisningai.db import models as m
 from redovisningai.db import repo
 from redovisningai.facts.model import FactStore
 from redovisningai.jobs.pipeline import ImportError_, import_sie
+from redovisningai.jobs.queue import enqueue_ai
 from redovisningai.review.analysis import PAYROLL, CompanyAnalysis, voucher_view
 from redovisningai.review.finding_priorities import rank_findings
 from redovisningai.sie.parser import parse_sie
@@ -80,11 +82,15 @@ async def upload(
 ) -> dict[str, Any]:
     raw = await file.read()
     try:
-        res = import_sie(principal.ctx, company_id, file.filename or "fil.se", raw, ai=_ai(principal))
+        # Import och deterministisk granskning i anropet (i trådpool, blockerar inte händelseloopen);
+        # AI-stegen körs i bakgrundskön.
+        res = await run_in_threadpool(import_sie, principal.ctx, company_id, file.filename or "fil.se", raw)
     except ImportError_ as exc:
         raise HTTPException(422, str(exc)) from exc
     invalidate_cache(company_id)
+    ai_queued = await run_in_threadpool(enqueue_ai, principal.org_id, company_id, res.reviewed_periods)
     return {
+        "ai_queued": ai_queued,
         "source_file_id": str(res.source_file_id) if res.source_file_id else None,
         "imports": [str(i) for i in res.import_ids],
         "duplicate": res.skipped_duplicate,

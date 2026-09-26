@@ -23,6 +23,7 @@ from redovisningai.db.session import TenantContext, tenant_session
 from redovisningai.devdata.generator import DEMO_PROFILES, generate
 from redovisningai.jobs.pipeline import import_sie
 from redovisningai.sie.writer import write_sie4
+from sie_samples import minimal_sie_with_missing_rent
 
 pytestmark = pytest.mark.usefixtures("database")
 
@@ -433,3 +434,46 @@ def test_dev_mode_logs_in_default_user_without_login_step(env, monkeypatch) -> N
     assert env["client"].get("/api/me", headers=H("kalle@api.se")).json()["user"]["email"] == "kalle@api.se"
     monkeypatch.setattr(get_settings(), "auth_mode", "oidc")
     assert env["client"].get("/api/me").status_code == 401
+
+
+def _no_inline_ai(_principal: object) -> object:
+    raise AssertionError("AI får inte köras i API-anropet; den ska ligga i bakgrundskön")
+
+
+def test_upload_answers_before_the_ai_and_queues_it(env, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from redovisningai.api import routes_company
+
+    queued: list[tuple[object, object, list[str]]] = []
+    monkeypatch.setattr(
+        routes_company, "enqueue_ai", lambda org, cid, periods: queued.append((org, cid, periods)) or True
+    )
+    monkeypatch.setattr(routes_company, "_ai", _no_inline_ai)
+    admin = TenantContext(env["org"].org_id, env["org"].admin_user_id, "ADMIN", True, True, "admin@api.se")
+    cid = create_company(admin, "Påhittat Hyresbolag AB", "556000-0001")
+
+    r = env["client"].post(
+        f"/api/companies/{cid}/imports",
+        headers=H("admin@api.se"),
+        files={"file": ("minimal.se", minimal_sie_with_missing_rent(), "text/plain")},
+    )
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["reviewed_periods"] and body["ai_queued"] is True
+    assert queued == [(env["org"].org_id, cid, body["reviewed_periods"])]
+
+
+def test_review_run_queues_the_ai_instead_of_running_it(env, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from redovisningai.api import routes_review
+
+    queued: list[list[str]] = []
+    monkeypatch.setattr(routes_review, "enqueue_ai", lambda org, cid, periods: queued.append(periods) or True)
+    monkeypatch.setattr(routes_review, "_ai", _no_inline_ai)
+
+    r = env["client"].post(
+        f"/api/companies/{env['cid']}/review/run", headers=H("admin@api.se"), json={"periods": ["2026-09"]}
+    )
+
+    assert r.status_code == 200, r.text
+    assert r.json() == {"reviewed": ["2026-09"], "ai_queued": True}
+    assert queued == [["2026-09"]]

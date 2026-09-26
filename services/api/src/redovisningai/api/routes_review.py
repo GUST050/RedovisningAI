@@ -29,6 +29,7 @@ from redovisningai.db.session import TenantContext, tenant_session
 from redovisningai.facts.model import CALC_VERSION
 from redovisningai.findings.lifecycle import FindingStatus
 from redovisningai.jobs.pipeline import review_company
+from redovisningai.jobs.queue import enqueue_ai
 from redovisningai.review.commentary import InvalidComparison, build_commentary
 from redovisningai.review.workflow import (
     WorkflowError,
@@ -211,9 +212,10 @@ def run_review(
     company_id: uuid.UUID, body: ReviewIn, principal: Principal = Depends(require_write), s: Session = Depends(db)
 ) -> dict[str, Any]:
     get_company(s, company_id)
-    done = review_company(TenantContext.worker(principal.org_id), company_id, periods=body.periods, ai=_ai(principal))
+    # Deterministisk granskning i anropet; AI-förslag och automatisk analys körs i bakgrundskön.
+    done = review_company(TenantContext.worker(principal.org_id), company_id, periods=body.periods)
     invalidate_cache(company_id)
-    return {"reviewed": done}
+    return {"reviewed": done, "ai_queued": enqueue_ai(principal.org_id, company_id, done)}
 
 
 @router.get("/periods")

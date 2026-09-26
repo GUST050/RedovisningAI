@@ -26,6 +26,7 @@ type UploadResult = {
   stats: Record<string, number>;
   issues: { message: string; severity: string }[];
   reviewed_periods: string[];
+  ai_queued?: boolean;
 };
 
 type TaxRec = {
@@ -168,6 +169,11 @@ function SieUpload({ base, onDone }: { base: string; onDone: () => void }) {
                   {result.stats.vouchers ?? 0} verifikationer ({result.stats.added ?? 0} nya, {result.stats.changed ?? 0} ändrade, {result.stats.removed ?? 0} borttagna).
                   {result.reviewed_periods.length > 0 && ` Granskade perioder: ${result.reviewed_periods.join(", ")}.`}
                 </p>
+                {result.ai_queued && (
+                  <p className="text-muted">
+                    AI-förslag på ärendena och analysen av senaste månaden tas fram i bakgrunden och visas om en stund.
+                  </p>
+                )}
               </>
             )}
             {result.issues.length > 0 && (

@@ -16,7 +16,7 @@ from redovisningai.ai.service import AIService, FakeProvider, InMemoryBudget
 from redovisningai.db import models as m
 from redovisningai.db.bootstrap import create_company, create_organization
 from redovisningai.db.session import TenantContext, tenant_session
-from redovisningai.jobs.pipeline import import_sie, review_company
+from redovisningai.jobs.pipeline import enrich_with_ai, import_sie, review_company
 from sie_samples import minimal_sie_with_missing_rent
 
 pytestmark = pytest.mark.usefixtures("database")
@@ -73,6 +73,35 @@ def test_ai_failure_is_logged_and_does_not_stop_the_import(database: str, caplog
     assert result.reviewed_periods  # importen och granskningen gick igenom
     assert _commentary(admin, company) is None
     assert "Automatisk AI-analys" in caplog.text
+
+
+def test_background_step_adds_case_suggestions_and_the_automatic_analysis(database: str) -> None:
+    admin, company = _company(database, "auto-ko")
+    imported = import_sie(admin, company, "minimal.se", minimal_sie_with_missing_rent())  # snabb granskning utan AI
+    assert _commentary(admin, company) is None
+
+    enrich_with_ai(TenantContext.worker(admin.org_id), company, imported.reviewed_periods, AIService(FakeProvider()))
+
+    saved = _commentary(admin, company)
+    assert saved is not None and saved["by"] == "automatisk analys"
+    with tenant_session(admin) as s:
+        cases = s.scalars(select(m.CaseRow).where(m.CaseRow.company_id == company, m.CaseRow.period == LATEST)).all()
+        assert cases and all(c.ai and c.ai["source"] == "ai" for c in cases)
+
+
+def test_background_step_logs_a_broken_model_and_keeps_going(database: str, caplog: pytest.LogCaptureFixture) -> None:
+    admin, company = _company(database, "auto-ko-fel")
+    imported = import_sie(admin, company, "minimal.se", minimal_sie_with_missing_rent())
+
+    class Broken(FakeProvider):
+        def structured(self, **kwargs: Any) -> Any:
+            raise RuntimeError("modellen föll")
+
+    with caplog.at_level(logging.ERROR, logger="redovisningai.jobs.pipeline"):
+        enrich_with_ai(TenantContext.worker(admin.org_id), company, imported.reviewed_periods, AIService(Broken()))
+
+    assert "AI" in caplog.text
+    assert _commentary(admin, company) is None
 
 
 @pytest.mark.parametrize(

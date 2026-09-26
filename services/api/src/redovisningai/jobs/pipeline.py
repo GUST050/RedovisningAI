@@ -374,21 +374,7 @@ def _save_cases(
     ai: AIService | None,
 ) -> None:
     existing = {c.case_key: c for c in s.scalars(select(m.CaseRow).where(m.CaseRow.company_id == company_id)).all()}
-    ai_by_ids: dict[frozenset[str], dict[str, Any]] = {}
-    if ai is not None and ai.enabled and cases:
-        pkg = analysis.case_package(result)
-        if pkg["cases"]:
-            out = ai.run(
-                "A2",
-                pkg,
-                result.store,
-                org_id=str(ctx.org_id),
-                company_id=str(company_id),
-                names_to_mask=analysis.ctx.person_names,
-                allowed_identifiers=analysis.allowed_identifiers(),
-            )
-            for c in out.data.get("cases", []):
-                ai_by_ids[frozenset(c["finding_ids"])] = {**c, "source": out.source, "trace_id": out.trace.id}
+    ai_by_ids = _a2_enrichment(ctx, company_id, analysis, result, ai) if cases else {}
     for c in cases:
         row = existing.get(c.key)
         if row is None:
@@ -402,6 +388,64 @@ def _save_cases(
         if enrichment is not None:
             row.ai = enrichment
         row.updated_at = datetime.now()
+
+
+def _a2_enrichment(
+    ctx: TenantContext, company_id: uuid.UUID, analysis: CompanyAnalysis, result: Any, ai: AIService | None
+) -> dict[frozenset[str], dict[str, Any]]:
+    """A2-förslag per ärende (nyckel: ärendets fynd-id). Tomt utan AI eller ärenden."""
+    if ai is None or not ai.enabled:
+        return {}
+    pkg = analysis.case_package(result)
+    if not pkg["cases"]:
+        return {}
+    out = ai.run(
+        "A2",
+        pkg,
+        result.store,
+        org_id=str(ctx.org_id),
+        company_id=str(company_id),
+        names_to_mask=analysis.ctx.person_names,
+        allowed_identifiers=analysis.allowed_identifiers(),
+    )
+    return {
+        frozenset(c["finding_ids"]): {**c, "source": out.source, "trace_id": out.trace.id}
+        for c in out.data.get("cases", [])
+    }
+
+
+def enrich_with_ai(ctx: TenantContext, company_id: uuid.UUID, periods: list[str], ai: AIService) -> None:
+    """AI-stegen efter en granskning, körda i bakgrundskön (plan §9.8): A2-förslag på periodernas
+    ärenden och automatisk A3 för senaste månaden. Granskningen är redan sparad; här ändras bara
+    AI-fälten. Ett modellfel loggas per steg och stoppar aldrig resten."""
+    if not periods or not ai.enabled:
+        return
+    with tenant_session(ctx) as s:
+        company = s.get(m.Company, company_id)
+        if company is None:
+            return
+        ledger, _ = repo.load_ledger(s, company)
+        analysis = CompanyAnalysis(ledger, repo.company_context(s, company))
+        records = repo.load_findings(s, company_id)
+    for spec in periods:
+        try:
+            # Samma granskning som sparades (i minnet) ger samma ärenden och fynd-id som i databasen.
+            result = analysis.review(analysis.period(spec), records)
+            if not result.cases:
+                continue
+            by_ids = _a2_enrichment(ctx, company_id, analysis, result, ai)
+            findings = {c.key: frozenset(f.id for f in c.findings) for c in result.cases}
+            with tenant_session(ctx) as s:
+                rows = s.scalars(
+                    select(m.CaseRow).where(m.CaseRow.company_id == company_id, m.CaseRow.case_key.in_(findings))
+                ).all()
+                for row in rows:
+                    enrichment = by_ids.get(findings[row.case_key])
+                    if enrichment is not None:
+                        row.ai, row.updated_at = enrichment, datetime.now()
+        except Exception:
+            log.exception("AI-förslag på ärenden misslyckades för %s %s", company_id, spec)
+    _auto_commentary(ctx, company_id, analysis, records, periods, ai)
 
 
 def review_all(org_id: uuid.UUID, ai: AIService | None = None) -> dict[str, list[str]]:

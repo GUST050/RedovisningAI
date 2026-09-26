@@ -40,6 +40,14 @@ def review_company_task(org_id: str, company_id: str, periods: list[str] | None 
     )
 
 
+@app.task(queue="ai", retry=0)  # inga automatiska omförsök: varje AI-anrop kostar, fel loggas i steget
+def ai_enrich_task(org_id: str, company_id: str, periods: list[str]) -> None:
+    """AI-stegen efter en granskning (A2-förslag och automatisk A3), utanför API-anropet."""
+    pipeline.enrich_with_ai(
+        TenantContext.worker(uuid.UUID(org_id)), uuid.UUID(company_id), periods, build_ai_service(uuid.UUID(org_id))
+    )
+
+
 @app.task(queue="sync", retry=3)
 def sync_company_task(org_id: str, company_id: str) -> dict[str, object]:
     """Hämta bokföring via kopplingen (t.ex. Fortnox) och importera."""
