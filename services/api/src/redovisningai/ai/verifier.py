@@ -79,14 +79,19 @@ def _allowed_number(token: str, allowed: set[str]) -> bool:
 
 def find_literal_numbers(text: str, allowed: set[str]) -> list[str]:
     without = PLACEHOLDER_RE.sub(" ", text)
+    # Tillåtna fraser, t.ex. kontonamnet "Arbetsgivaravgifter 31,42 %", är namn och inte siffror
+    # som AI:n skrivit själv; bara den exakta frasen undantas (längsta först).
+    for phrase in sorted((a for a in allowed if " " in a and re.search(r"\d", a)), key=len, reverse=True):
+        without = re.sub(re.escape(phrase), " ", without, flags=re.IGNORECASE)
     bad = []
     for m in NUMBER.finditer(without):
-        tok = m.group(0)
-        if not re.search(r"\d", tok):
-            continue
-        has_unit = bool(re.search(r"(%|procent|kr|tkr|mkr|msek|sek|kronor)\s*$", tok, re.I))
-        if has_unit or not _allowed_number(tok, allowed):
-            bad.append(tok.strip())
+        # Komma följt av mellanslag är en uppräkning ("2440, 2611"), inte ett decimaltal ("12,5").
+        for tok in re.split(r",\s+", m.group(0)):
+            if not re.search(r"\d", tok):
+                continue
+            has_unit = bool(re.search(r"(%|procent|kr|tkr|mkr|msek|sek|kronor)\s*$", tok, re.I))
+            if has_unit or not _allowed_number(tok, allowed):
+                bad.append(tok.strip())
     return bad
 
 

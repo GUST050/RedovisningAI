@@ -212,6 +212,41 @@ def test_verifier_rejects_literal_numbers_and_unknown_ids() -> None:
     assert [r.code for r in res.rejected] == ["literal_number", "unknown_fact", "unsafe_content"]
 
 
+def test_a3_can_cite_maturity_and_open_cases_as_internal_facts(analysis, review) -> None:  # type: ignore[no-untyped-def]
+    # Instruktionen ber A3 säga om perioden är preliminär; då måste det finnas ett faktum att hänvisa till.
+    package = analysis.commentary_package(review)
+    projected = period_commentary_input({**package, "findings": []})
+    ids = {projected["maturity"]["fact_id"], projected["open_cases"]["fact_id"]}
+    assert None not in ids and ids <= {f["id"] for f in projected["facts"]}
+    assert all(review.store.get(i).visibility is Visibility.INTERNAL for i in ids)  # type: ignore[union-attr]
+    client = analysis.client_package(review)
+    assert not ids & {f["id"] for f in client["facts"]} and "fact_id" not in client["maturity"]  # aldrig hos kund
+
+
+def test_a3_allows_the_account_numbers_its_package_shows(analysis, review) -> None:  # type: ignore[no-untyped-def]
+    from redovisningai.review.commentary import a3_allowed_identifiers
+
+    projected = period_commentary_input({**analysis.commentary_package(review), "findings": []})
+    shown = {str(a) for f in projected["facts"] for a in f.get("accounts", [])}
+    assert shown and shown <= a3_allowed_identifiers(projected)
+
+
+def test_a_list_of_account_numbers_is_not_one_decimal_number() -> None:
+    # "2440, 2611" är en uppräkning av konton; svenska decimaltal skrivs utan mellanslag ("12,5").
+    allowed = {"2440", "2611", "2641", "2920"}
+    assert find_literal_numbers("Granska kontona 2440, 2611, 2641 och 2920.", allowed) == []
+    assert find_literal_numbers("Marginalen var 12,5 % och kostnaden 1 234 kr.", allowed) == ["12,5 %", "1 234 kr"]
+
+
+def test_account_names_that_contain_rates_are_not_typed_numbers(analysis) -> None:  # type: ignore[no-untyped-def]
+    # "7510 Arbetsgivaravgifter 31,42 %" är ett kontonamn, inte en siffra som AI:n hittat på.
+    named = {a.name for a in analysis.ledger.accounts.values() if any(ch.isdigit() for ch in a.name)}
+    assert named and named <= analysis.allowed_identifiers()
+    allowed = {"7510", "Arbetsgivaravgifter 31,42 %"}
+    assert find_literal_numbers("Kostnaden på 7510 Arbetsgivaravgifter 31,42 % saknas i perioden.", allowed) == []
+    assert find_literal_numbers("Avgifterna motsvarar 31,42 % av lönerna.", allowed)  # utan kontonamnet: egen siffra
+
+
 def test_verifier_downgrades_unsupported_causal_claims() -> None:
     s = _store()
     a = next(f.id for f in s if f.subject == "a")

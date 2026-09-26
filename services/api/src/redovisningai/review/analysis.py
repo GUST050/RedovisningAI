@@ -33,7 +33,7 @@ from redovisningai.accounting.statements import StatementMapping, balance_sheet,
 from redovisningai.accounting.variance import category_bridge, drilldown, line_accounts, result_bridge
 from redovisningai.cases.builder import Case, build_cases
 from redovisningai.domain.ledger import Ledger
-from redovisningai.facts.model import CALC_VERSION, Fact, FactStatus, FactStore, Visibility
+from redovisningai.facts.model import CALC_VERSION, Fact, FactStatus, FactStore, Unit, Visibility
 from redovisningai.findings.lifecycle import FindingRecord, SuppressionRule, reconcile
 from redovisningai.maturity.assess import AccountingMethod, Maturity, assess
 from redovisningai.memory.resolutions import Resolution, apply_memory
@@ -43,6 +43,7 @@ from redovisningai.rules.rates import RateTable, default_rates
 log = logging.getLogger(__name__)
 
 PAYROLL = AccountSet.of((7000, 7699), (2710, 2719))
+MATURITY_LABELS = {"COMPLETE": "fullständig", "PRELIMINARY": "preliminär", "NO_DATA": "saknar data"}
 
 
 @dataclass(slots=True)
@@ -305,6 +306,8 @@ class CompanyAnalysis:
     def allowed_identifiers(self) -> set[str]:
         ids = {str(a) for a in self.ledger.accounts} | {str(a) for a in self.index.accounts_used}
         ids |= {str(v.key) for v in self.ledger.all_vouchers()}
+        # Kontonamn med tal ("Försäljning inom Sverige, 25 % moms") får citeras utan att räknas som egna siffror.
+        ids |= {a.name for a in self.ledger.accounts.values() if any(ch.isdigit() for ch in a.name)}
         return ids
 
     def source_fingerprint(self, current: Period, previous: Period, *, prompt_version: str) -> str:
@@ -368,9 +371,31 @@ class CompanyAnalysis:
         store = FactStore()
         metrics = self.metric_facts(analysis_period, compare, store, low_maturity=review.maturity.low_periodization)
         bridge = result_bridge(self.index, analysis_period, compare, mapping=self.ctx.statement_mapping, store=store)
+        open_cases = [c for c in review.cases if c.visibility is not Visibility.RESTRICTED_AML]
+        high_open = sum(1 for c in open_cases if c.severity == "HIGH" and c.status != "CLOSED")
+        # Interna fakta så att A3 kan säga om perioden är preliminär och hur många allvarliga ärenden
+        # som är öppna (verifieraren kräver ett faktum för varje observation). Aldrig i kundunderlaget.
+        maturity_fact = store.new(
+            "text",
+            "maturity:status",
+            "Periodens mognad",
+            None,
+            Unit.TEXT,
+            period=analysis_period.spec,
+            visibility=Visibility.INTERNAL,
+            text_value=MATURITY_LABELS.get(review.maturity.status.value, review.maturity.status.value),
+        )
+        high_fact = store.new(
+            "count",
+            "open_cases:high",
+            "Öppna ärenden med hög allvarlighet",
+            Decimal(high_open),
+            Unit.COUNT,
+            period=analysis_period.spec,
+            visibility=Visibility.INTERNAL,
+        )
         for fact in store:
             review.store.add(fact)  # verifieraren slår upp påståendenas fakta-id i granskningens store
-        open_cases = [c for c in review.cases if c.visibility is not Visibility.RESTRICTED_AML]
         return {
             "company": self.ctx.name,
             "period": {"spec": analysis_period.spec, "label": analysis_period.label},
@@ -403,9 +428,10 @@ class CompanyAnalysis:
                     for c in bridge.components
                 ]
             },
-            "maturity": review.maturity.to_dict(),
+            "maturity": {**review.maturity.to_dict(), "fact_id": maturity_fact.id},
             "open_cases": {
-                "high": sum(1 for c in open_cases if c.severity == "HIGH" and c.status != "CLOSED"),
+                "high": high_open,
+                "high_fact_id": high_fact.id,
                 "titles": [c.title for c in open_cases if c.status != "CLOSED"][:10],
             },
             "facts": [f.to_dict() for f in store if f.visibility is not Visibility.RESTRICTED_AML][:200],
@@ -417,6 +443,7 @@ class CompanyAnalysis:
         safe_ids = {f.id for f in review.store if f.visibility is Visibility.CLIENT_SAFE}
         base["facts"] = [f for f in base["facts"] if f["id"] in safe_ids]
         base.pop("open_cases", None)
+        base["maturity"] = {k: v for k, v in base["maturity"].items() if k != "fact_id"}  # internt faktum
         base["ask_client"] = [
             {"key": c.key, "title": c.title, "question_hint": None}
             for c in review.cases

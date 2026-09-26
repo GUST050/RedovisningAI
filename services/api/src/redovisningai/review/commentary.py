@@ -99,6 +99,15 @@ def a3_findings(
     return output
 
 
+def a3_allowed_identifiers(ai_package: dict[str, Any]) -> set[str]:
+    """Det A3 får skriva ut: paketets fakta-id och varje kontonummer som paketet visar
+    (fyndens konton och nyckeltalens konton) – kontonummer är identifierare, inte egna siffror."""
+    allowed = {str(f["id"]) for f in ai_package["facts"]}
+    allowed.update(str(account) for finding in ai_package["findings"] for account in finding["accounts"])
+    allowed.update(str(account) for fact in ai_package["facts"] for account in fact.get("accounts", []))
+    return allowed
+
+
 def build_commentary(
     analysis: CompanyAnalysis,
     review: ReviewResult,
@@ -130,8 +139,6 @@ def build_commentary(
         "task": "A3",
     }
     ai_package = period_commentary_input(package)
-    allowed_fact_ids = {str(f["id"]) for f in ai_package["facts"]}
-    allowed_fact_ids.update(str(account) for finding in ai_package["findings"] for account in finding["accounts"])
     out = ai.run(
         "A3",
         ai_package,
@@ -140,7 +147,7 @@ def build_commentary(
         company_id=company_id,
         # The provider sees only the projected aggregates. Claim verification
         # is limited to facts included in that exact package.
-        allowed_identifiers=allowed_fact_ids,
+        allowed_identifiers=a3_allowed_identifiers(ai_package),
     )
     metadata["provider"] = out.trace.provider
     metadata["model"] = out.trace.model
