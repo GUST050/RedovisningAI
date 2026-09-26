@@ -64,6 +64,8 @@ services:
       test: ["CMD-SHELL", "pg_isready -U postgres -d redovisningai"]
       interval: 5s
       retries: 20
+    # Som api/worker/web: annars kommer appen tillbaka efter en omstart av Docker men inte databasen.
+    restart: unless-stopped
 
   # API-avbilden byggs en gång (av api) och återanvänds av migrate och worker.
   migrate:
