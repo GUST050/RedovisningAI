@@ -25,6 +25,7 @@ from redovisningai.ai.tools import analyst_tools
 from redovisningai.ai.verifier import find_literal_numbers, verify_claims
 from redovisningai.devdata.generator import DEMO_PROFILES, generate
 from redovisningai.facts.model import FactStore, Unit, Visibility
+from redovisningai.portfolio.brief import brief_package
 from redovisningai.review.analysis import CompanyAnalysis, CompanyContext
 from redovisningai.rules.engine import CompanySettings
 
@@ -513,23 +514,16 @@ def test_eval_suite_passes_with_fake_provider() -> None:
 def test_rule_based_fallbacks_survive_verification() -> None:
     """Reservtexterna (utan AI) måste klara verifieraren, annars blir svaret tomt."""
     service = AIService(None)
+    brief_store = FactStore()
+    company = {
+        "name": "Bygg & Co AB",
+        "open_findings": {"high": 6},
+        "priority": {"score": 80, "reasons": [{"code": "high", "points": 30, "text": "6 allvarliga fynd"}]},
+    }
     brief = service.run(
-        "A7",
-        {
-            "companies": [
-                {
-                    "name": "Bygg & Co AB",
-                    "score": 80,
-                    "reasons": [{"code": "high", "points": 30, "text": "6 allvarliga fynd"}],
-                }
-            ],
-            "allowed": [],
-        },
-        FactStore(),
-        org_id="o",
-        allowed_identifiers={"Bygg & Co AB"},
+        "A7", brief_package([company], brief_store), brief_store, org_id="o", allowed_identifiers={"Bygg & Co AB"}
     )
     assert brief.source == "rules"
-    assert [c["text"] for c in brief.data["claims"]] == ["Bygg & Co AB: 6 allvarliga fynd."]
+    assert [c["rendered"] for c in brief.data["claims"]] == ["Bygg & Co AB: 6 allvarliga fynd."]
     ask = service.run("A5", {"question": "Varför?"}, FactStore(), org_id="o")
     assert ask.data["claims"]

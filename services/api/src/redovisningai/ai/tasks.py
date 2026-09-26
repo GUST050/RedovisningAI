@@ -675,7 +675,9 @@ class PortfolioBrief(AITask):
         + """
 
 Uppgift: skriv "veckans prioriteringar" för en konsult: 3–8 korta påståenden om vilka kunder som
-behöver uppmärksamhet och varför, utifrån prioriteringspoäng och skäl. Nämn kunder vid namn.""",
+behöver uppmärksamhet och varför, utifrån prioriteringspoäng och skäl. Nämn kunder vid namn.
+Poäng och antal fynd finns som fakta (fact_id); skriv siffror bara som {f:id}. Skälen är koder med
+etiketter utan tal – hitta inte på egna siffror.""",
         schema={
             "type": "object",
             "properties": {"claims": claims_schema(10)},
@@ -687,11 +689,19 @@ behöver uppmärksamhet och varför, utifrån prioriteringspoäng och skäl. Nä
     def fallback(self, package: dict[str, Any], store: FactStore) -> dict[str, Any]:
         claims = []
         for c in package.get("companies", [])[:6]:
-            if not c.get("reasons"):
+            reasons = c.get("reasons", [])[:2]
+            if not reasons:
                 continue
-            reasons = ", ".join(r["text"].lower() for r in c["reasons"][:2])
-            # HYPOTHESIS: verifieraren kräver fakta-id för OBSERVATION, och skälen är inga beräknade fakta.
-            claims.append({"type": "HYPOTHESIS", "text": f"{c['name']}: {reasons}.", "fact_ids": []})
+            parts = [f"{{f:{r['fact_id']}}} {r['label']}" if r.get("fact_id") else r["label"] for r in reasons]
+            fact_ids = [r["fact_id"] for r in reasons if r.get("fact_id")]
+            # OBSERVATION kräver fakta-id; skäl utan räknat värde (t.ex. inaktuell granskning) blir hypotes.
+            claims.append(
+                {
+                    "type": "OBSERVATION" if fact_ids else "HYPOTHESIS",
+                    "text": f"{c['name']}: {', '.join(parts)}.",
+                    "fact_ids": fact_ids,
+                }
+            )
         return {"claims": claims}
 
     def verify(self, output, package, store, allowed):  # type: ignore[no-untyped-def]

@@ -247,16 +247,12 @@ def users(s: Session = Depends(db)) -> list[dict[str, Any]]:
 def portfolio_brief(principal: Principal = Depends(get_principal), s: Session = Depends(db)) -> dict[str, Any]:
     from redovisningai.ai.factory import build_ai_service
     from redovisningai.facts.model import FactStore
+    from redovisningai.portfolio.brief import brief_package
 
     data = portfolio(principal, s)
-    pkg = {
-        "companies": [
-            {"name": c["name"], "score": c["priority"]["score"], "reasons": c["priority"]["reasons"]}
-            for c in data["companies"][:15]
-        ],
-        "allowed": [],
-    }
+    store = FactStore()  # poäng och antal fynd som fakta, så att AI:n kan hänvisa i stället för att skriva tal
+    pkg = brief_package(data["companies"], store)
     out = build_ai_service(principal.org_id).run(
-        "A7", pkg, FactStore(), org_id=str(principal.org_id), allowed_identifiers={c["name"] for c in data["companies"]}
+        "A7", pkg, store, org_id=str(principal.org_id), allowed_identifiers={c["name"] for c in data["companies"]}
     )
     return out.to_dict()
