@@ -197,3 +197,13 @@ Status 2026-09-27 23:24: Task 14 in progress — implementer running since 23:0x
 Task 14: review BASE is e7bdb78 (handoff commit on top of 6f90bc7); later docs/HANDOFF.md commits inside a task range are log-only — reviewers ignore docs/HANDOFF.md.
 Task 14: implementer DONE_WITH_CONCERNS, commits adb8271 (approvals + settings UI) and beca844 (A3 bridge package); 300 passed, 2 skipped; eval 31 OK; ruff/format/mypy/typecheck/build clean. Concerns: routes_company.py 907 lines; draft made before an approval stays current (consultant regenerates); implementer's own calls: web status "Ej börjat gälla", approving also needs write access, zero-change lines not selected, only unknown {m:X} rejected in internal text. Offline A3 content on Sjövik grows 11 450 → 23 280 characters with the bridge.
 Task 14: commits adb8271..beca844 pushed UNREVIEWED (user asked to push everything for takeover). Review (opus) dispatched at 23:29 on 7c2a655..beca844.
+Task 14: review (opus) on 7c2a655..beca844 — spec ✅, quality Approved, no Critical/Important. Checked: 0004 RLS strings identical to 0002, fresh-DB order, failover coverage, worker visibility, verify call sites, payroll selection non-vacuous.
+- Ruling R28 (Task 14 minor #1, plan-mandated): routes_company.py at 907 lines — the approval section (AiApprovalIn, _approval_dict, 3 routes) moves to its own router in the final fix wave — mechanical, and the file already exceeded 800 before the task — cost if wrong: one more module.
+- Ruling R29 (Task 14 minor #2): approval state stays out of draft staleness; after a new approval the consultant regenerates the draft — spec only requires bridge and prompt versions in the fingerprint — cost if wrong: an existing draft lacks the bridge until regenerated.
+Task 14: minor (deferred): provider text not stripped/validated (" openai" never matches, UI says Giltig); not checked against provider_names().
+Task 14: minor (deferred): revoke has no confirmation or busy state in SettingsTab.
+Task 14: minor (deferred): test gaps — non-approver 403 on revoke, company-mismatch 404, nested failover chain.
+Task 14: minor (deferred): DRY — "ADMIN or can_approve_reports" in deps.py and routes_review.py; allowed data types spelled three times; <kunddata> parsing duplicated in evals.py and tests/test_ai.py.
+Task 14: minor (deferred): GET /ai-approvals builds a full AIService (clients, DbBudget, trace sink) just for provider names.
+Task 14: deferred check: browser check of the settings card; 0004 down/up round trip claimed by implementer only.
+Task 14: complete (commits 7c2a655..beca844, review clean) — already pushed in 1dabc16, now reviewed.
