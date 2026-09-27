@@ -634,7 +634,7 @@ def test_eval_suite_passes_with_fake_provider() -> None:
     results = run_evals(AIService(FakeProvider()))
     failed = [r.to_dict() for r in results if not r.passed]
     assert not failed, failed
-    assert {r.task for r in results} == {"A1", "A2", "A3", "A4", "findings"}
+    assert {r.task for r in results} == {"A1", "A2", "A3", "A4", "findings", "locked"}
 
 
 def test_rule_based_fallbacks_survive_verification() -> None:
