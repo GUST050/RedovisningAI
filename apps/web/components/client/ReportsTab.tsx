@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AiBadge, Button, Card, Claims, ErrorBox, Field, Loading, StatusBadge, cx, inputCls } from "@/components/ui";
-import { ApiError, type Claim, send, useLoad } from "@/lib/api";
+import { AiBadge, Button, Card, ErrorBox, Field, Loading, StatusBadge, cx, inputCls } from "@/components/ui";
+import { type AiDoc, ApiError, type Claim, type PeriodCommentary, send, useLoad } from "@/lib/api";
 import { dateTime, monthLabel } from "@/lib/format";
+import { PeriodAnalysis } from "./PeriodAnalysis";
 import { useClient } from "./shared";
 
-type AiDoc<T> = { task: string; data: T; source: string; created_at?: string; by?: string; approved?: boolean; edited_by?: string; stale?: boolean; compare_period?: string };
 type Meeting = { summary: Claim[]; questions: Claim[]; case_questions?: { case_key: string; question: string }[] };
 type DecisionDraft = { decision: "approve" | "reject" | "correct" | ""; reason: string; corrected_text: string };
 
@@ -18,7 +18,7 @@ type PeriodDetail = {
   reported_at: string | null;
   override_note: string | null;
   changes: { voucher: string; kind: string; date: string; text: string }[];
-  commentary: AiDoc<{ claims: Claim[] }> | null;
+  commentary: PeriodCommentary | null;
   client_report: AiDoc<Meeting> | null;
 };
 
@@ -77,18 +77,10 @@ export function ReportsTab() {
           )
         }
       >
-        {d.commentary ? (
-          <div className="space-y-2">
-            {d.commentary.stale && <p className="rounded bg-medium-soft px-3 py-2 text-[12px] text-medium">Kommentaren bygger på ändrad bokföring, jämförelse eller promptversion och är inaktuell. Skapa en ny innan den används.</p>}
-            <div className="flex items-center gap-2 text-[12px] text-muted">
-              <AiBadge source={d.commentary.source === "ai" ? "ai" : "rules"} />
-              {d.commentary.created_at && <span>{dateTime(d.commentary.created_at)} · {d.commentary.by}{d.commentary.compare_period ? ` · jämför med ${monthLabel(d.commentary.compare_period)}` : ""}</span>}
-            </div>
-            <Claims claims={d.commentary.data.claims} />
-          </div>
-        ) : (
-          <p className="text-muted">En kort analys av perioden med hypoteser och frågor. Alla siffror hämtas från beräkningsmotorn.</p>
-        )}
+        <PeriodAnalysis
+          commentary={d.commentary}
+          emptyText="En kort analys av perioden med hypoteser och frågor. Alla siffror hämtas från beräkningsmotorn."
+        />
       </Card>
 
       <MeetingCard d={d} busy={busy === "meeting"} onGenerate={() => run("meeting", send(`${base}/periods/${month}/meeting${compareQuery}`, "POST"))} onSaved={detail.reload} />

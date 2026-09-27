@@ -6,6 +6,7 @@ import { Card, ErrorBox, Loading, cx } from "@/components/ui";
 import { type Fact, type MetricEntry, type Overview, useLoad } from "@/lib/api";
 import { monthLabel, pct, sek } from "@/lib/format";
 import { MetricExplanationPanel } from "./MetricExplanation";
+import { AiAnalysisCard } from "./PeriodAnalysis";
 import { Amount, Diff, VoucherLink, useClient } from "./shared";
 
 type Trend = { months: string[]; net_sales: string[]; costs: string[]; operating_result: string[] };
@@ -64,6 +65,7 @@ export function OverviewTab() {
           <MetricCard key={e.id} entry={e} compareLabel={section.compare.label} />
         ))}
       </div>
+      <AiAnalysisCard key={`ai-${month}`} />
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_380px]">
         <Card title="Utveckling per månad">{chart ? <TrendChart categories={chart.categories} series={chart.series} /> : <Loading />}</Card>
         <Card title={`Periodmognad – ${monthLabel(m.period)}`}>
