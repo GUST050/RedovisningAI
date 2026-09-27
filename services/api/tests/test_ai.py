@@ -323,6 +323,36 @@ def test_verifier_downgrades_unsupported_causal_claims() -> None:
     assert res.downgraded == 1
 
 
+def test_a_bridge_fact_never_makes_a_business_cause_an_explanation() -> None:
+    """Planen §9.8: en korrekt bokföringsbrygga bevisar inte en affärsorsak (pris, volym, kunder,
+    leverantörer, personalstyrka eller omvärld) – sådant blir en märkt hypotes."""
+    s = _store()
+    comp = next(f.id for f in s if f.kind == "variance_component")
+    ref = "{f:" + comp + "}"
+    texts = [
+        ("EXPLANATION", "Resultatet förklaras av högre konsultkostnader " + ref + "."),
+        ("EXPLANATION", "Kostnaden ökade eftersom leverantören höjde priset " + ref + "."),
+        ("EXPLANATION", "Omsättningen föll på grund av lägre efterfrågan " + ref + "."),
+        ("OBSERVATION", "Kunden har lagt färre order " + ref + "."),
+        ("OBSERVATION", "Fler anställda ger högre personalkostnader " + ref + "."),
+        ("OBSERVATION", "Kundfordringar, leverantörsskulder och kundförluster ökade " + ref + "."),
+        ("EXPLANATION", "Avskrivningarna sänkte resultatet " + ref + "."),
+    ]
+
+    res = verify_claims([{"type": t, "text": text, "fact_ids": [comp]} for t, text in texts], s)
+
+    assert [c["type"] for c in res.accepted] == [
+        "EXPLANATION",  # bryggförklaring
+        "HYPOTHESIS",  # pris
+        "HYPOTHESIS",  # efterfrågan
+        "HYPOTHESIS",  # kund och order
+        "HYPOTHESIS",  # personalstyrka
+        "OBSERVATION",  # kontonamn är inte affärshändelser
+        "EXPLANATION",
+    ]
+    assert res.downgraded == 4
+
+
 def test_verifier_blocks_internal_facts_in_client_text() -> None:
     s = _store()
     internal = next(f.id for f in s if f.subject == "internal")

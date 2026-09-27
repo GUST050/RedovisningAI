@@ -21,7 +21,18 @@ CLAIM_TYPES = ("OBSERVATION", "EXPLANATION", "HYPOTHESIS", "QUESTION")
 
 CAUSAL = re.compile(
     r"\b(på grund av|beror på|berodde på|orsakad[e]? av|orsakas av|orsaken är|ledde till|leder till|"
-    r"eftersom|till följd av|drivs av|drevs av|förklaras av)\b",
+    r"eftersom|till följd av|tack vare|med anledning av|drivs av|drevs av|förklaras av)\b",
+    re.I,
+)
+# Affärshändelser som bokföringen (SIE) inte kan belägga: pris, volym, kunder, leverantörer,
+# order/avtal, personalstyrka och omvärld. En korrekt resultatbrygga bevisar inte sådant (plan §9.8).
+# Kontonamn som kundfordringar, leverantörsskulder, kundförluster och marknadsföring matchar inte.
+BUSINESS_CAUSE = re.compile(
+    r"\b(pris(et|er|erna|höjning\w*|ökning\w*|sänkning\w*)?|volym(en|er|erna)?|efterfrågan|"
+    r"kund(en|er|erna)?|leverantör(en|er|erna)?|order|beställning(en|ar|arna)?|avtal(et|en)?|"
+    r"kontrakt(et|en)?|\w*anställ(d|da|de|ning|ningar)|sjukskriv\w*|uppsägning\w*|varsel|permitter\w*|"
+    r"kampanj(en|er)?|marknad(en|släget)?|konkurren\w*|\w*konjunktur\w*|inflation\w*|"
+    r"valutakurs(en|er|erna)?|växelkurs(en|er|erna)?)\b",
     re.I,
 )
 # Tal som ser ut som belopp/procent/mängd. Tillåtna: årtal, kontonummer och id:n i paketet.
@@ -106,12 +117,12 @@ def verify_claims(
     allowed = set(allowed_identifiers or set())
     res = VerificationResult()
     for raw in claims:
-        claim = {
+        text = str(raw.get("text", ""))
+        claim: dict[str, Any] = {
             "type": str(raw.get("type", "")).upper(),
-            "text": str(raw.get("text", "")),
+            "text": text,
             "fact_ids": [str(x) for x in raw.get("fact_ids", [])],
         }
-        text = claim["text"]
         if claim["type"] not in CLAIM_TYPES:
             res.rejected.append(Rejection(claim, "okänd påståendetyp", "unknown_type"))
             continue
@@ -141,6 +152,9 @@ def verify_claims(
         if claim["type"] in ("OBSERVATION", "EXPLANATION") and not referenced:
             res.rejected.append(Rejection(claim, f"{claim['type']} kräver minst ett fakta-id", "missing_fact"))
             continue
+        if claim["type"] in ("OBSERVATION", "EXPLANATION") and BUSINESS_CAUSE.search(text):
+            claim["type"] = "HYPOTHESIS"  # affärsorsak utan belägg i bokföringen, även med bryggfakta
+            res.downgraded += 1
         if CAUSAL.search(text) and claim["type"] != "HYPOTHESIS":
             has_component = any(store.get(f).kind == "variance_component" for f in referenced)  # type: ignore[union-attr]
             if claim["type"] != "EXPLANATION" or not has_component:
