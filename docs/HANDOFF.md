@@ -217,3 +217,4 @@ Task 15: minor (deferred): payroll stripping and the top-5 constant duplicated b
 Task 15: minor (deferred): _validate_bridge_target lives in api/routes_company.py and is imported (lazily) by ai/tools.py — move the validation next to target_accounts in review/analysis.py.
 Task 15: minor (deferred): no pytest pins the tool's error paths (unknown category, unused account, unknown kind, payroll-only).
 Task 15: complete (commits 9bb78ac..534c1e1, review clean)
+Task 16: dispatched implementer (sonnet) at 00:12, BASE a7e90a7, report task-16-report.md. Carries R4 (client_package extended), R5 (approved case questions printed), R12 (ask_client → key + template topic, never case title; question-draft route derives topic from the case's findings), plus: A4 verify drops case questions with {m: or bare codes.
