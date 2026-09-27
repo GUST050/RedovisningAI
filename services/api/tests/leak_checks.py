@@ -16,5 +16,5 @@ def strings(obj: object) -> str:
 
 
 def leaks(text: str, names: Iterable[str]) -> list[str]:
-    """Namnen som förekommer som hela ord i texten, oavsett skiftläge."""
-    return [n for n in names if re.search(rf"(?<!\w){re.escape(n)}(?!\w)", text, re.IGNORECASE)]
+    """Namnen som förekommer som hela ord i texten, oavsett skiftläge och även i genitiv ("Telias")."""
+    return [n for n in names if re.search(rf"(?<!\w){re.escape(n)}(?=(?::?s)?(?!\w))", text, re.IGNORECASE)]

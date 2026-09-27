@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import re
 from datetime import date
@@ -220,3 +221,37 @@ def test_fact_ids_sent_to_the_provider_carry_no_counterparty_names(analysis) -> 
     slugs = {re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") for name in guard.pseudonyms.known_names()}
     assert ids and "staples" in slugs
     assert not [(slug, i) for slug in slugs for i in ids if slug in i]
+
+
+def test_genitive_names_in_the_question_are_sent_as_codes(analysis) -> None:  # type: ignore[no-untyped-def]
+    guard = EgressGuard.for_task("A5", analysis)
+    provider = FakeProvider()
+    question = "Varför ökade Telias fakturor, Microsofts licenser och Fastighets AB Kvarnen:s hyra?"
+    package = {"question": question, "default_period": "2026-09", "months_with_data": []}
+
+    AIService(provider).run("A5", package, FactStore(), org_id="o", company_id="c", egress=guard)
+
+    sent = provider.calls[0]["user_content"].split("\n", 1)[0]
+    assert leaks("Telias fakturor", ["Telia"]) == ["Telia"]  # provet ser själv genitivformen
+    assert not leaks(sent, ["Telia", "Microsoft", "Fastighets AB Kvarnen"])
+    assert re.fullmatch(r"Fråga från konsulten: Varför ökade M\d+s fakturor, M\d+s licenser och M\d+:s hyra\?", sent)
+    # Internt får koderna tillbaka motpartens visningsnamn, med genitivändelsen kvar.
+    restored = guard.unmask(sent, client_facing=False)
+    assert restored.endswith("Telias fakturor, Microsofts licenser och Fastighets Kvarnen:s hyra?")
+
+
+def test_a1_and_a2_packages_carry_no_voucher_or_row_text(analysis, review) -> None:  # type: ignore[no-untyped-def]
+    texts = {t for v in analysis.ledger.all_vouchers() for t in (v.text, *(r.text for r in v.rows)) if t}
+    # Utan kontonamn blir 6110 ett okänt konto som A1 ska föreslå en plats för.
+    accounts = {n: a for n, a in analysis.ledger.accounts.items() if n != 6110}
+    unmapped = CompanyAnalysis(dataclasses.replace(analysis.ledger, accounts=accounts), analysis.ctx)
+
+    a1 = EgressGuard.for_task("A1", unmapped).prepare_package(unmapped.mapping_package())
+    a2 = EgressGuard.for_task("A2", analysis).prepare_package(analysis.case_package(review))
+
+    example = next(a for a in a1["accounts"] if a["account"] == 6110)["examples"][0]
+    assert example["voucher_type"] == ["supplier_invoice"] and re.fullmatch(r"M\d+", example["counterparty"])
+    evidence = [e for c in a2["cases"] for f in c["findings"] for e in f["evidence"]]
+    assert evidence and all("text" not in e and all("text" not in r for r in e["rows"]) for e in evidence)
+    sent = strings([a1, a2])
+    assert not [t for t in texts if t in sent]

@@ -22,8 +22,10 @@ if TYPE_CHECKING:
     from redovisningai.review.analysis import CompanyAnalysis
 
 COUNTERPARTY_RE = re.compile(r"\{m:(M\d+)\}")
+# Slutet på ett helt ord, även med svensk genitiv ("Telias", "M1:s"). Bara stammen byts ut.
+_WORD_END = r"(?=(?::?s)?(?!\w))"
 # {m:Mx} eller en fristående kod, i en genomgång så att ett insatt namn aldrig byts ut igen.
-_CODE_OR_REFERENCE = re.compile(COUNTERPARTY_RE.pattern + r"|(?<!\w)(M\d+)(?!\w)")
+_CODE_OR_REFERENCE = re.compile(COUNTERPARTY_RE.pattern + rf"|(?<!\w)(M\d+){_WORD_END}")
 
 # Tillåtna toppnycklar per uppgift: exakt det projektionerna skickar. Övriga uppgifter maskeras ändå.
 PACKAGE_FIELDS: dict[str, frozenset[str]] = {
@@ -64,7 +66,7 @@ class EgressViolation(Exception):
 
 
 def render_counterparties(text: str, names: dict[str, str]) -> str:
-    """Byt {m:Mx} och fristående utdelade koder mot namn; okända koder lämnas orörda."""
+    """Byt {m:Mx} och fristående utdelade koder ("M1", "M1s") mot namn; okända koder lämnas orörda."""
 
     def name(match: re.Match[str]) -> str:
         return names.get(match.group(1) or match.group(2), match.group(0))
@@ -86,7 +88,7 @@ class CounterpartyPseudonyms:
         # Längsta formen först, så att "Fastighets AB Kvarnen" går före "Kvarnen".
         alternatives = sorted((form for form, _ in by_fold.values()), key=lambda form: (-len(form), form))
         alternation = "|".join(re.escape(form) for form in alternatives)
-        self._pattern = re.compile(rf"(?<!\w)(?:{alternation})(?!\w)", re.IGNORECASE) if alternatives else None
+        self._pattern = re.compile(rf"(?<!\w)(?:{alternation}){_WORD_END}", re.IGNORECASE) if alternatives else None
 
     @classmethod
     def from_ledger(cls, ledger: Ledger, aliases: dict[str, str]) -> CounterpartyPseudonyms:
@@ -127,7 +129,7 @@ class CounterpartyPseudonyms:
         return self._codes[key]
 
     def mask(self, text: str) -> str:
-        """Byt varje känd form (hela ord, oavsett skiftläge) mot motpartens kod."""
+        """Byt varje känd form (hela ord, oavsett skiftläge, även i genitiv) mot motpartens kod."""
         if self._pattern is None:
             return text
         return self._pattern.sub(lambda match: self.code_for(self._key_of(match.group(0))), text)

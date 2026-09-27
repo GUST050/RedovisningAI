@@ -31,13 +31,15 @@ from redovisningai.accounting.periods import (
 )
 from redovisningai.accounting.statements import StatementMapping, balance_sheet, income_statement
 from redovisningai.accounting.variance import category_bridge, drilldown, line_accounts, result_bridge
+from redovisningai.analytics.counterparties import counterparty_for_row
 from redovisningai.cases.builder import Case, build_cases
-from redovisningai.domain.ledger import Ledger
+from redovisningai.domain.ledger import Ledger, Row, Voucher
 from redovisningai.facts.model import CALC_VERSION, Fact, FactStatus, FactStore, Unit, Visibility
 from redovisningai.findings.lifecycle import FindingRecord, SuppressionRule, reconcile
 from redovisningai.maturity.assess import AccountingMethod, Maturity, assess
 from redovisningai.memory.resolutions import Resolution, apply_memory
 from redovisningai.rules.engine import CompanySettings, FindingCandidate, RuleContext, RuleDefinition, run_rules
+from redovisningai.rules.patterns import classify
 from redovisningai.rules.rates import RateTable, default_rates
 
 log = logging.getLogger(__name__)
@@ -464,6 +466,7 @@ class CompanyAnalysis:
                 continue
             d = c.to_dict()
             for f in d["findings"]:
+                f.pop("description", None)  # fyndtexten citerar ofta verifikationstexten
                 f["evidence"] = self._evidence(f["vouchers"])
             cases.append(
                 {
@@ -482,13 +485,51 @@ class CompanyAnalysis:
             )
         return {"company": self.ctx.name, "period": review.period.spec, "cases": cases}
 
+    def mapping_package(self, limit: int = 3) -> dict[str, Any]:
+        """Paket för mappningsassistenten (A1): okända konton med exempel som verifikationstyp och
+        motpart (blir en kod vid AI-gränsen) – aldrig verifikations- eller radtext."""
+        unknown = []
+        for acc in sorted(self.index.accounts_used):
+            name = self.ledger.account_name(acc)
+            if not (name.startswith("Konto ") or acc not in self.ledger.accounts):
+                continue
+            examples: list[dict[str, Any]] = []
+            for v in self.ledger.all_vouchers():
+                row = next((r for r in v.rows if r.account == acc), None)
+                if row is not None:
+                    examples.append({"voucher_type": voucher_type(v), "counterparty": self._counterparty(v, row)})
+                    if len(examples) == limit:
+                        break
+            unknown.append({"account": acc, "name": name, "examples": examples})
+        return {"accounts": unknown}
+
     def _evidence(self, voucher_keys: list[str], limit: int = 4) -> list[dict[str, Any]]:
+        """Verifikationer som AI-underlag: typ och motpart i stället för verifikations- och radtext."""
         wanted = set(voucher_keys[:limit])
         out = []
         for v in self.ledger.all_vouchers():
-            if str(v.key) in wanted:
-                out.append(voucher_view(v, self.ledger, include_payroll_rows=False))
+            if str(v.key) not in wanted:
+                continue
+            view = voucher_view(v, self.ledger, include_payroll_rows=False)
+            view.pop("text")
+            view["voucher_type"] = voucher_type(v)
+            shown = [r for r in v.rows if r.account not in PAYROLL]  # samma rader som voucher_view visar
+            view["rows"] = [
+                {**{k: x for k, x in data.items() if k != "text"}, "counterparty": self._counterparty(v, row)}
+                for data, row in zip(view["rows"], shown, strict=True)
+            ]
+            out.append(view)
         return out
+
+    def _counterparty(self, v: Voucher, row: Row) -> str | None:
+        # Nyckeln och inte namnet: nyckeln är alltid en form som AI-gränsen byter mot en kod, även
+        # när en person i namnet maskeras först ("Utlägg ägare Erik").
+        return counterparty_for_row(v, row, self.ctx.aliases).key or None
+
+
+def voucher_type(v: Voucher) -> list[str]:
+    """Verifikationens kodade typ (mönster ur rules/patterns), som ersätter texten i AI-underlag."""
+    return sorted(p.value for p in classify(v))
 
 
 def voucher_view(v: Any, ledger: Ledger, *, include_payroll_rows: bool) -> dict[str, Any]:

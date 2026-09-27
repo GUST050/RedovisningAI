@@ -236,7 +236,7 @@ class MappingAssistant(AITask):
 Uppgift: föreslå var okända eller avvikande konton hör hemma. För varje konto: rad i
 resultat-/balansräkningen (legal_line) och management-kategori (category, endast kostnadskonton,
 annars null), konfidens 0–1 och en kort motivering. Utgå från BAS-kontoplanen, kontonamnet och
-exempeltexterna. Är du osäker: låg konfidens.""",
+exemplen: verifikationstyp och motpart som kod (M1, M2 …), aldrig text. Är du osäker: låg konfidens.""",
         schema={
             "type": "object",
             "properties": {
@@ -308,7 +308,8 @@ class CaseBuilderTask(AITask):
         + """
 
 Uppgift: du får periodens granskningsfynd, redan grupperade av regler i förslag till ärenden,
-med bevis (verifikationer, kontohistorik) och eventuella tidigare bedömningar från kundminnet.
+med bevis (verifikationer som typ, konton och belopp med motpart som kod M1, M2 …, utan text; fakta
+med kontohistorik) och eventuella tidigare bedömningar från kundminnet.
 1. Justera grupperingen om fynd uppenbart hör ihop eller inte gör det. Varje fynd-id ska finnas i
    exakt ett ärende.
 2. Ge varje ärende en kort titel och en trolig orsak som påståenden (claims).

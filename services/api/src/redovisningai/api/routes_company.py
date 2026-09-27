@@ -667,17 +667,12 @@ def mapping_suggestions(company_id: uuid.UUID, principal: Principal = Depends(ge
     from redovisningai.facts.model import FactStore
 
     a = load_analysis(principal, company_id)
-    unknown = []
-    for acc in sorted(a.index.accounts_used):
-        name = a.ledger.account_name(acc)
-        if name.startswith("Konto ") or acc not in a.ledger.accounts:
-            examples = [v.text for v in a.ledger.all_vouchers() if any(r.account == acc for r in v.rows)][:3]
-            unknown.append({"account": acc, "name": name, "examples": examples})
-    if not unknown:
+    package = a.mapping_package()
+    if not package["accounts"]:
         return {"suggestions": [], "source": "rules"}
     out = _ai(principal).run(
         "A1",
-        {"accounts": unknown},
+        package,
         FactStore(),
         org_id=str(principal.org_id),
         company_id=str(company_id),
