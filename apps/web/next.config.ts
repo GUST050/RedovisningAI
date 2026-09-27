@@ -18,10 +18,15 @@ const csp = [
   "frame-ancestors 'none'",
 ].join("; ");
 
+// Omskrivningen till API:t avbryts annars efter 30 s. En SIE-import av ett helt år (25 000
+// verifikationer) sparas och granskas i ett och samma anrop och tar ett par minuter.
+const API_PROXY_TIMEOUT_MS = 10 * 60 * 1000;
+
 const nextConfig: NextConfig = {
   // Fristående server för containern (apps/web/Dockerfile). RAI_API_URL läses vid bygget.
   output: "standalone",
   poweredByHeader: false,
+  experimental: { proxyTimeout: API_PROXY_TIMEOUT_MS },
   async rewrites() {
     return [{ source: "/api/:path*", destination: `${api}/api/:path*` }];
   },
