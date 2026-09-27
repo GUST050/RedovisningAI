@@ -7,15 +7,18 @@ Regler (deterministiska):
 4. Orsaksord ("på grund av", "beror på" …) kräver EXPLANATION med avvikelsekomponent – annars
    nedgraderas påståendet till HYPOTHESIS.
 5. Inga länkar, bilder eller HTML (skydd mot dataexfiltration via rendering).
+6. Motparter skrivs {m:Mx} och bara med koder som delats ut i samma körning. I kundtext underkänns
+   varje {m:…} och varje fristående utdelad kod ("M1", "M1s"): de blir aldrig namn där.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
 from typing import Any
 
+from redovisningai.ai.pseudonymize import WORD_END
 from redovisningai.facts.model import PLACEHOLDER_RE, FactStore, Visibility, render_text
 
 CLAIM_TYPES = ("OBSERVATION", "EXPLANATION", "HYPOTHESIS", "QUESTION")
@@ -40,6 +43,10 @@ BUSINESS_CAUSE = re.compile(
 NUMBER = re.compile(r"(?<![\w{:])[-+−]?\d[\d\s .,]*\d?(?:\s?(?:%|procent|kr|tkr|mkr|msek|sek|kronor))?", re.I)
 UNIT_AFTER = re.compile(r"^\s?(%|procent|kr|tkr|mkr|msek|sek|kronor)", re.I)
 UNSAFE = re.compile(r"(https?://|www\.|!\[|\]\(|<\s*img|<\s*a\s|<\s*script|javascript:)", re.I)
+# Varje motpartsplatshållare, även en felskriven ({m:x}); och en fristående kod, även i genitiv
+# ("M1s", "M1:s") – samma ordgräns som när koderna blir namn (ai/egress.py).
+COUNTERPARTY_PLACEHOLDER = re.compile(r"\{m:([^}]*)\}")
+BARE_CODE = re.compile(rf"(?<!\w)(M\d+){WORD_END}")
 
 CLAIM_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -116,14 +123,35 @@ def find_literal_numbers(text: str, allowed: set[str]) -> list[str]:
     return bad
 
 
+def _counterparty_rejection(claim: dict[str, Any], codes: Collection[str], client_facing: bool) -> Rejection | None:
+    """{m:Mx} godkänns bara för koder ur samma körning och bara i intern text."""
+    text = claim["text"]
+    placeholders = COUNTERPARTY_PLACEHOLDER.findall(text)
+    if client_facing:
+        if placeholders or any(code in codes for code in BARE_CODE.findall(text)):
+            return Rejection(claim, "motpartskoder får inte stå i kundtext", "counterparty_in_client_text")
+        return None
+    unknown = sorted({code for code in placeholders if code not in codes})
+    if unknown:
+        return Rejection(
+            claim,
+            f"okända motpartskoder: {', '.join(unknown)} – använd bara koder ur underlaget",
+            "unknown_counterparty",
+        )
+    return None
+
+
 def verify_claims(
     claims: list[dict[str, Any]],
     store: FactStore,
     *,
     client_facing: bool = False,
     allowed_identifiers: set[str] | None = None,
+    pseudonyms: Collection[str] | None = None,
 ) -> VerificationResult:
+    """`pseudonyms` är motpartskoderna som delats ut i körningen; utan dem är varje {m:…} okänd."""
     allowed = set(allowed_identifiers or set())
+    codes = frozenset(pseudonyms or ())
     res = VerificationResult()
     for raw in claims:
         text = str(raw.get("text", ""))
@@ -137,6 +165,10 @@ def verify_claims(
             continue
         if UNSAFE.search(text):
             res.rejected.append(Rejection(claim, "länkar, bilder eller HTML är inte tillåtna", "unsafe_content"))
+            continue
+        counterparty = _counterparty_rejection(claim, codes, client_facing)
+        if counterparty is not None:
+            res.rejected.append(counterparty)
             continue
         referenced = set(PLACEHOLDER_RE.findall(text)) | set(claim["fact_ids"])
         unknown = [f for f in referenced if f not in store]

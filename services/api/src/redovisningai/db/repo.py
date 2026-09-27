@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from collections import Counter, defaultdict
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -673,4 +674,106 @@ def save_resolution(session: Session, ctx: TenantContext, res: Resolution) -> No
             example_finding_id=res.example_finding_id,
             example_title=res.example_title,
         )
+    )
+
+
+# ---------------------------------------------------------------------------- utökat AI-underlag (plan §9.10)
+
+AI_DATA_TYPES = ("transaction_bridge",)
+MAX_PROVIDER_LENGTH = 40  # samma som kolumnen ai_data_approval.provider
+
+
+def approve_ai_data(
+    session: Session,
+    ctx: TenantContext,
+    company_id: uuid.UUID,
+    data_types: list[str],
+    provider: str,
+    valid_from: date,
+    valid_to: date,
+) -> m.AiDataApproval:
+    """Kundens godkännande av utökat underlag till en namngiven leverantör under en giltighetstid."""
+    unknown = sorted(set(data_types) - set(AI_DATA_TYPES))
+    if not data_types or unknown:
+        raise ValueError(f"Okänd datatyp för AI-underlag: {', '.join(unknown) or 'ingen angiven'}")
+    if not provider.strip() or len(provider) > MAX_PROVIDER_LENGTH:
+        raise ValueError("Leverantören måste anges med högst 40 tecken")
+    if valid_to < valid_from:
+        raise ValueError("Giltighetstiden slutar innan den börjar")
+    approval = m.AiDataApproval(
+        org_id=ctx.org_id,
+        company_id=company_id,
+        data_types=sorted(set(data_types)),
+        provider=provider,
+        valid_from=valid_from,
+        valid_to=valid_to,
+        approved_by=ctx.user_email or str(ctx.user_id),
+    )
+    session.add(approval)
+    session.flush()
+    audit(
+        session,
+        ctx,
+        "ai.data_approval.created",
+        company_id,
+        approval_id=approval.id,
+        data_types=approval.data_types,
+        provider=provider,
+        valid_from=valid_from,
+        valid_to=valid_to,
+    )
+    return approval
+
+
+def revoke_ai_data(session: Session, ctx: TenantContext, approval_id: uuid.UUID) -> None:
+    """Återkalla ett godkännande; det gäller från och med nästa AI-körning. Redan återkallat lämnas orört."""
+    approval = session.get(m.AiDataApproval, approval_id)
+    if approval is None:
+        raise LookupError("Godkännandet finns inte eller saknar behörighet")
+    if approval.revoked_at is not None:
+        return
+    approval.revoked_at = datetime.now().astimezone()
+    approval.revoked_by = ctx.user_email or str(ctx.user_id)
+    audit(
+        session,
+        ctx,
+        "ai.data_approval.revoked",
+        approval.company_id,
+        approval_id=approval.id,
+        provider=approval.provider,
+    )
+
+
+def approved_ai_providers(session: Session, company_id: uuid.UUID, data_type: str, on: date) -> set[str]:
+    """Leverantörer med ett giltigt, icke återkallat godkännande för datatypen den dagen."""
+    rows = session.execute(
+        select(m.AiDataApproval.provider, m.AiDataApproval.data_types).where(
+            m.AiDataApproval.company_id == company_id,
+            m.AiDataApproval.revoked_at.is_(None),
+            m.AiDataApproval.valid_from <= on,
+            m.AiDataApproval.valid_to >= on,
+        )
+    ).all()
+    return {provider for provider, data_types in rows if data_type in data_types}
+
+
+def extended_ai_data_allowed(
+    session: Session,
+    company_id: uuid.UUID,
+    providers: Collection[str],
+    on: date,
+    data_type: str = "transaction_bridge",
+) -> bool:
+    """Utökat underlag bara när varje leverantör som kan ta emot data – även reserven i en
+    failover-kedja – har ett giltigt godkännande. Utan leverantör finns inget att godkänna."""
+    return bool(providers) and set(providers) <= approved_ai_providers(session, company_id, data_type, on)
+
+
+def list_ai_approvals(session: Session, company_id: uuid.UUID) -> list[m.AiDataApproval]:
+    return list(
+        session.scalars(
+            select(m.AiDataApproval)
+            .where(m.AiDataApproval.company_id == company_id)
+            .order_by(m.AiDataApproval.approved_at.desc())
+        ).all()
     )

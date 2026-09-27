@@ -1,4 +1,5 @@
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
@@ -7,7 +8,8 @@ from typing import Any
 
 import pytest
 
-from redovisningai.ai.egress import EgressViolation
+from leak_checks import leaks, strings
+from redovisningai.ai.egress import EgressGuard, EgressViolation
 from redovisningai.ai.providers.anthropic_provider import AnthropicConfig, AnthropicProvider
 from redovisningai.ai.providers.base import (
     FailoverProvider,
@@ -28,6 +30,7 @@ from redovisningai.devdata.generator import DEMO_PROFILES, generate
 from redovisningai.facts.model import FactStore, Unit, Visibility
 from redovisningai.portfolio.brief import brief_package
 from redovisningai.review.analysis import CompanyAnalysis, CompanyContext
+from redovisningai.review.transaction_package import a3_transactions
 from redovisningai.rules.engine import CompanySettings
 
 AS_OF = date(2026, 10, 12)
@@ -271,6 +274,86 @@ def test_a3_can_use_its_bounded_tool_and_name_accounts(analysis, review) -> None
     assert [c["text"] for c in result["data"]["claims"]] == ["Kan ni stämma av konto 1930 och konto 2440?"]
 
 
+def test_a3_gets_transaction_bridges_with_codes_only(analysis, review) -> None:  # type: ignore[no-untyped-def]
+    guard = EgressGuard.for_task("A3", analysis)
+    rows = a3_transactions(analysis, review, analysis.period("2026-09"), analysis.period("2025-09"), guard.pseudonyms)
+    payload = period_commentary_input({**analysis.commentary_package(review), "transactions": rows})
+
+    assert 0 < len(rows) <= 5 and all(len(r["groups"]) <= 5 for r in rows)
+    assert re.search(r"\bM\d+\b", strings(payload))
+    assert not leaks(strings(payload), guard.pseudonyms.known_names())
+    assert "transactions" not in period_commentary_input(analysis.commentary_package(review))
+
+
+def test_a3_transactions_leave_out_payroll_and_cite_facts_in_the_package(analysis, review) -> None:  # type: ignore[no-untyped-def]
+    from redovisningai.review.analysis import PAYROLL
+    from redovisningai.review.transaction_package import select_changes
+
+    current, previous = analysis.period("2026-09"), analysis.period("2025-09")
+    guard = EgressGuard.for_task("A3", analysis)
+    targets = select_changes(analysis, current, previous)
+    rows = a3_transactions(analysis, review, current, previous, guard.pseudonyms)
+    package = {**analysis.commentary_package(review), "facts": review.store.to_list(), "transactions": rows}
+    payload = period_commentary_input(package)
+
+    assert "line:personnel" not in targets and [r["target"] for r in rows] == targets
+    ids = {f["id"] for f in payload["facts"]}
+    cited = [r["change_fact_id"] for r in payload["transactions"]] + [
+        fid
+        for r in payload["transactions"]
+        for fid in (
+            r["identified_share_fact_id"],
+            *(g["fact_id"] for g in r["groups"]),
+            *(p[k] for p in r["parts"] for k in ("fact_id", "count_effect_fact_id", "amount_effect_fact_id")),
+        )
+        if fid
+    ]
+    assert cited and set(cited) <= ids
+    assert not any(a in PAYROLL for f in payload["facts"] for a in f.get("accounts", []))
+    codes = [g["code"] for r in rows for g in r["groups"]]
+    assert all(code is None or re.fullmatch(r"M\d+", code) for code in codes)
+    assert all(g["code"] is None for r in rows for g in r["groups"] if g["part"] == "unknown")
+    assert _keys(payload["transactions"]) <= {
+        "target",
+        "change_fact_id",
+        "parts",
+        "groups",
+        "identified_share_fact_id",
+        "code",
+        "fact_id",
+        "current_count",
+        "previous_count",
+        "count_effect_fact_id",
+        "amount_effect_fact_id",
+        "part",
+        "signals",
+    }
+
+
+def test_a3_commentary_sends_the_bridge_only_when_extended(analysis, review) -> None:  # type: ignore[no-untyped-def]
+    from redovisningai.review.commentary import build_commentary
+
+    def cite_counterparty(user_content: str) -> dict[str, Any]:
+        start, end = user_content.index("<kunddata>") + len("<kunddata>"), user_content.index("</kunddata>")
+        rows = json.loads(user_content[start:end]).get("transactions", [])
+        group = next(g for r in rows for g in r["groups"] if g["code"])
+        text = "{m:" + group["code"] + "} stod för {f:" + group["fact_id"] + "}."
+        return {"claims": [{"type": "OBSERVATION", "text": text, "fact_ids": [group["fact_id"]]}]}
+
+    provider = FakeProvider({"A3": cite_counterparty})
+    guard = EgressGuard.for_task("A3", analysis)
+    extended = build_commentary(analysis, review, ai=AIService(provider), org_id="o", company_id="c", extended=True)
+    plain_provider = FakeProvider()
+    plain = build_commentary(analysis, review, ai=AIService(plain_provider), org_id="o", company_id="c")
+
+    sent = provider.calls[0]["user_content"]
+    assert '"transactions"' in sent and not leaks(sent, guard.pseudonyms.known_names())
+    assert '"transactions"' not in plain_provider.calls[0]["user_content"]
+    assert extended["analysis_metadata"]["extended"] is True and plain["analysis_metadata"]["extended"] is False
+    [claim] = extended["data"]["claims"]
+    assert "{m:" not in claim["text"] and not re.search(r"\bM\d+\b", claim["rendered"])  # namnet i intern vy
+
+
 def test_a_year_right_before_a_fact_reference_is_not_a_typed_number() -> None:
     assert find_literal_numbers("Inga personalkostnader för sep 2026 {f:line_personnel_1}.", set()) == []
 
@@ -361,6 +444,33 @@ def test_verifier_blocks_internal_facts_in_client_text() -> None:
         [{"type": "OBSERVATION", "text": "{f:" + internal + "}", "fact_ids": [internal]}], s, client_facing=True
     )
     assert not res.accepted and "interna" in res.rejected[0].reason
+
+
+def test_counterparty_codes_are_checked_and_never_reach_client_text() -> None:
+    s = _store()
+    a = next(f.id for f in s if f.subject == "a")
+    known = {"type": "OBSERVATION", "text": "{m:M1} stod för {f:" + a + "}.", "fact_ids": [a]}
+    unknown = {"type": "OBSERVATION", "text": "{m:M9} stod för {f:" + a + "}.", "fact_ids": [a]}
+    bare = {"type": "OBSERVATION", "text": "M1 stod för {f:" + a + "}.", "fact_ids": [a]}
+
+    internal = verify_claims([known, unknown], s, pseudonyms={"M1"})
+    client = verify_claims([known, bare], s, pseudonyms={"M1"}, client_facing=True)
+
+    assert [c["text"] for c in internal.accepted] == [known["text"]]
+    assert [r.code for r in internal.rejected] == ["unknown_counterparty"]
+    assert [r.code for r in client.rejected] == ["counterparty_in_client_text"] * 2
+
+
+def test_counterparty_placeholders_need_codes_from_the_same_run() -> None:
+    # Utan utdelade koder är varje {m:…} okänd; i kundtext stoppas även en felaktig platshållare.
+    s = _store()
+    a = next(f.id for f in s if f.subject == "a")
+    claim = {"type": "OBSERVATION", "text": "{m:M1} och {m:x} stod för {f:" + a + "}.", "fact_ids": [a]}
+    genitive = {"type": "OBSERVATION", "text": "M1s kostnad var {f:" + a + "}.", "fact_ids": [a]}
+
+    assert [r.code for r in verify_claims([claim], s).rejected] == ["unknown_counterparty"]
+    client = verify_claims([claim, genitive], s, pseudonyms={"M1"}, client_facing=True)
+    assert [r.code for r in client.rejected] == ["counterparty_in_client_text"] * 2
 
 
 def test_literal_number_detection() -> None:
@@ -660,6 +770,14 @@ def test_failover_provider() -> None:
     fo = FailoverProvider([Down(), up])  # type: ignore[list-item]
     res = fo.structured(task="A3", tier=ModelTier.STRONG, system="", user_content="", schema={})
     assert res.provider == "fake"
+
+
+def test_provider_names_list_every_provider_that_could_receive_data() -> None:
+    first, second = FakeProvider(), FakeProvider()
+    first.name, second.name = "openai", "claude-anthropic"
+
+    assert AIService(FailoverProvider([first, second])).provider_names() == {"openai", "claude-anthropic"}
+    assert AIService(None).provider_names() == frozenset()
 
 
 def test_eval_suite_passes_with_fake_provider() -> None:

@@ -291,10 +291,20 @@ def _auto_commentary(
         with tenant_session(ctx) as s:
             pr = _period_review(s, company_id, period)
             metadata = (pr.commentary or {}).get("analysis_metadata") if pr is not None else None
+            # Utökat underlag bara med giltigt godkännande för varje leverantör som kan ta emot data.
+            extended = repo.extended_ai_data_allowed(s, company_id, ai.provider_names(), date.today())
         if pr is None or analysis.draft_is_current(metadata, prompt_version=A3_PROMPT_VERSION):
             return
         review = analysis.review(analysis.period(period), records)
-        run = partial(build_commentary, analysis, review, ai=ai, org_id=str(ctx.org_id), company_id=str(company_id))
+        run = partial(
+            build_commentary,
+            analysis,
+            review,
+            ai=ai,
+            org_id=str(ctx.org_id),
+            company_id=str(company_id),
+            extended=extended,
+        )
         try:  # behåll ett tidigare sparat periodpar (t.ex. konsultens val av föregående månad)
             result = run(compare_spec=metadata.get("compare_period") if metadata else None)
         except InvalidComparison:

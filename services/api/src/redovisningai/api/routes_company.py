@@ -14,6 +14,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
@@ -36,6 +37,7 @@ from redovisningai.api.deps import (
     get_principal,
     invalidate_cache,
     load_analysis,
+    require_report_approver,
     require_write,
 )
 from redovisningai.config import get_settings
@@ -827,3 +829,79 @@ def set_mapping(
     repo.audit(s, principal.ctx, "mapping.changed", company_id, kind=kind, account=account, target=target)
     invalidate_cache(company_id)
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------- utökat AI-underlag (§9.10)
+
+
+class AiApprovalIn(BaseModel):
+    data_types: list[Literal["transaction_bridge"]] = Field(min_length=1)
+    provider: str = Field(min_length=1, max_length=40)
+    valid_from: date
+    valid_to: date
+
+    @model_validator(mode="after")
+    def _valid_range(self) -> AiApprovalIn:
+        if self.valid_to < self.valid_from:
+            raise ValueError("Giltighetstiden slutar innan den börjar")
+        return self
+
+
+def _approval_dict(a: m.AiDataApproval) -> dict[str, Any]:
+    return {
+        "id": str(a.id),
+        "data_types": list(a.data_types),
+        "provider": a.provider,
+        "valid_from": a.valid_from.isoformat(),
+        "valid_to": a.valid_to.isoformat(),
+        "approved_by": a.approved_by,
+        "approved_at": a.approved_at.isoformat(),
+        "revoked_at": a.revoked_at.isoformat() if a.revoked_at else None,
+    }
+
+
+@router.get("/ai-approvals")
+def ai_approvals(
+    company_id: uuid.UUID, principal: Principal = Depends(get_principal), s: Session = Depends(db)
+) -> dict[str, Any]:
+    """Godkännanden, leverantörerna som kan ta emot data och om utökat underlag gäller i dag."""
+    get_company(s, company_id)
+    providers = _ai(principal).provider_names()
+    return {
+        "approvals": [_approval_dict(a) for a in repo.list_ai_approvals(s, company_id)],
+        "providers": sorted(providers),
+        "extended_active": repo.extended_ai_data_allowed(s, company_id, providers, date.today()),
+    }
+
+
+@router.post("/ai-approvals")
+def approve_ai_data(
+    company_id: uuid.UUID,
+    body: AiApprovalIn,
+    principal: Principal = Depends(require_report_approver),
+    s: Session = Depends(db),
+) -> dict[str, Any]:
+    get_company(s, company_id)
+    try:
+        approval = repo.approve_ai_data(
+            s, principal.ctx, company_id, list(body.data_types), body.provider, body.valid_from, body.valid_to
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return _approval_dict(approval)
+
+
+@router.post("/ai-approvals/{approval_id}/revoke")
+def revoke_ai_data(
+    company_id: uuid.UUID,
+    approval_id: uuid.UUID,
+    principal: Principal = Depends(require_report_approver),
+    s: Session = Depends(db),
+) -> dict[str, Any]:
+    """Återkalla ett godkännande; nästa AI-körning får dagens underlag."""
+    get_company(s, company_id)
+    approval = s.get(m.AiDataApproval, approval_id)
+    if approval is None or approval.company_id != company_id:
+        raise HTTPException(404, "Godkännandet finns inte")
+    repo.revoke_ai_data(s, principal.ctx, approval_id)
+    return _approval_dict(approval)

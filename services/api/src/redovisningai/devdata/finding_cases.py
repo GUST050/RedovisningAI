@@ -281,3 +281,92 @@ def locked_cases() -> tuple[LockedCase, ...]:
         payroll_ptl(),
         prompt_injection(),
     )
+
+
+# ---------------------------------------------------------------------------- transaktionsbryggan (Task 14)
+
+BRIDGE_TARGET = "line:other_external"
+BRIDGE_COMPARE = month(2025, 9)
+LANDLORD = "Hyresvärden"  # radtexten på hyran i `_base`
+
+
+@dataclass(frozen=True, slots=True)
+class BridgeCase:
+    """Låst fall för A3:s utökade underlag: facit per bryggdel för `target` (september 2026 mot
+    september 2025) och motpartsnamn i bokföringen som aldrig får nå leverantören."""
+
+    code: str
+    name: str
+    ledger: Ledger
+    parts: dict[str, Decimal]  # exakt effekt per bryggdel
+    names: tuple[str, ...]
+    count_effect: Decimal | None = None
+    amount_effect: Decimal | None = None
+    min_unknown_share: Decimal | None = None  # andel oidentifierat (absoluta belopp) minst
+    target: str = BRIDGE_TARGET
+    current: Period = CURRENT
+    compare: Period = BRIDGE_COMPARE
+
+
+def _invoices(prefix: str, days: list[date], account: int, amount: str, counterparty: str | None) -> list[Voucher]:
+    """Leverantörsfakturor; utan motpart står bara en generisk verifikationstext ("Diverse")."""
+    text = f"Faktura {counterparty}" if counterparty else "Diverse"
+    return [
+        _voucher(f"{prefix}{n}", day, ((account, amount), (2440, "-" + amount)), text, counterparty)
+        for n, day in enumerate(days, start=1)
+    ]
+
+
+def bridge_one_period() -> BridgeCase:
+    earlier = _invoices("2509b", [date(2025, 9, 12)], 6550, "12000", "Bergsbyrån")
+    later = _invoices("2609f", [date(2026, 9, 12)], 6550, "18000", "Fjällkonsult")
+    return BridgeCase(
+        "bridge_one_period",
+        "Motpart bara i ena perioden: en konsult i vardera september",
+        _ledger(_base(date(2025, 1, 1)) + earlier + later),
+        {
+            "both": Decimal("0"),
+            "current_only": Decimal("18000"),
+            "previous_only": Decimal("-12000"),
+            "unknown": Decimal("0"),
+        },
+        ("Bergsbyrån", "Fjällkonsult", LANDLORD),
+    )
+
+
+def bridge_count_and_amount() -> BridgeCase:
+    # 2 × 1 000 → 3 × 1 500. X = 3 × 2 000 / 2 = 3 000: antalseffekt 1 000, beloppseffekt 1 500.
+    earlier = _invoices("2509k", [date(2025, 9, 5), date(2025, 9, 20)], 6110, "1000", "Kontorsbolaget")
+    later = _invoices("2609k", [date(2026, 9, 4), date(2026, 9, 14), date(2026, 9, 24)], 6110, "1500", "Kontorsbolaget")
+    return BridgeCase(
+        "bridge_count_and_amount",
+        "Antals- mot beloppseffekt: fler och dyrare fakturor från samma motpart",
+        _ledger(_base(date(2025, 1, 1)) + earlier + later),
+        {"both": Decimal("2500"), "current_only": Decimal("0"), "previous_only": Decimal("0"), "unknown": Decimal("0")},
+        ("Kontorsbolaget", LANDLORD),
+        count_effect=Decimal("1000"),
+        amount_effect=Decimal("1500"),
+    )
+
+
+def bridge_unknown_share() -> BridgeCase:
+    # Okänt 4 × 5 000 och 6 × 5 000 mot hyra 20 000 per månad: 50 000 av 90 000 är oidentifierat.
+    earlier = _invoices("2509u", [date(2025, 9, d) for d in (3, 10, 17, 24)], 6110, "5000", None)
+    later = _invoices("2609u", [date(2026, 9, d) for d in (2, 7, 12, 17, 22, 27)], 6110, "5000", None)
+    return BridgeCase(
+        "bridge_unknown_share",
+        "Hög andel okänd motpart: fakturor med bara generisk text",
+        _ledger(_base(date(2025, 1, 1)) + earlier + later),
+        {
+            "both": Decimal("0"),
+            "current_only": Decimal("0"),
+            "previous_only": Decimal("0"),
+            "unknown": Decimal("10000"),
+        },
+        (LANDLORD,),
+        min_unknown_share=Decimal("0.5"),
+    )
+
+
+def bridge_cases() -> tuple[BridgeCase, ...]:
+    return (bridge_one_period(), bridge_count_and_amount(), bridge_unknown_share())

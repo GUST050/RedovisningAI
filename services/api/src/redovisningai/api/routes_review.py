@@ -309,9 +309,18 @@ def commentary(
     principal: Principal = Depends(require_write),
 ) -> dict[str, Any]:
     a, rev = _review_result(principal, company_id, period)
+    ai = _ai(principal)
+    with tenant_session(principal.ctx) as s:  # utökat underlag bara med giltigt godkännande för varje leverantör
+        extended = repo.extended_ai_data_allowed(s, company_id, ai.provider_names(), date.today())
     try:
         result = build_commentary(
-            a, rev, ai=_ai(principal), org_id=str(principal.org_id), company_id=str(company_id), compare_spec=compare
+            a,
+            rev,
+            ai=ai,
+            org_id=str(principal.org_id),
+            company_id=str(company_id),
+            compare_spec=compare,
+            extended=extended,
         )
     except InvalidComparison as exc:
         raise HTTPException(422, f"Ogiltig jämförelseperiod: {compare}") from exc

@@ -501,3 +501,24 @@ def test_ai_routes_send_through_the_counterparty_guard(env, monkeypatch, task, p
 
     assert response.status_code == 200
     assert guards[task] is not None and guards[task].pseudonyms.known_names()
+
+
+def test_only_report_approvers_can_approve_extended_ai_data(env) -> None:  # type: ignore[no-untyped-def]
+    cl, cid = env["client"], env["cid"]
+    url = f"/api/companies/{cid}/ai-approvals"
+    body = {
+        "data_types": ["transaction_bridge"],
+        "provider": "openai",
+        "valid_from": "2026-09-01",
+        "valid_to": "2026-12-31",
+    }
+
+    assert cl.post(url, json=body, headers=H("kalle@api.se")).status_code == 403
+    assert cl.post(url, json={**body, "data_types": ["voucher_text"]}, headers=H("admin@api.se")).status_code == 422
+    created = cl.post(url, json=body, headers=H("admin@api.se"))
+    assert created.status_code == 200
+    revoked = cl.post(f"{url}/{created.json()['id']}/revoke", headers=H("admin@api.se"))
+    assert revoked.status_code == 200
+    listed = cl.get(url, headers=H("kalle@api.se")).json()
+    assert [a["revoked_at"] is not None for a in listed["approvals"]] == [True]
+    assert listed["extended_active"] is False

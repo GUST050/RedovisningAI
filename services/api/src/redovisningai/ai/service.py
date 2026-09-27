@@ -14,6 +14,7 @@ from typing import Any, Protocol
 
 from redovisningai.ai.egress import EgressGuard, EgressViolation
 from redovisningai.ai.providers.base import (
+    FailoverProvider,
     ModelProvider,
     ModelTier,
     ProviderError,
@@ -130,6 +131,12 @@ def _stop_at_boundary(trace: AITrace) -> None:
     log.warning("AI-gränsen stoppade sändningen för uppgift %s", trace.task)
 
 
+def _provider_names(provider: ModelProvider) -> frozenset[str]:
+    if isinstance(provider, FailoverProvider):
+        return frozenset(name for link in provider.providers for name in _provider_names(link))
+    return frozenset({provider.name})
+
+
 CLAIM_FIELDS = ("claims", "summary", "questions", "root_cause", "rationale")
 
 
@@ -171,6 +178,10 @@ class AIService:
     @property
     def enabled(self) -> bool:
         return self.provider is not None
+
+    def provider_names(self) -> frozenset[str]:
+        """Varje leverantör som kan ta emot data, även reserverna i en failover-kedja."""
+        return _provider_names(self.provider) if self.provider is not None else frozenset()
 
     def run(
         self,
@@ -287,7 +298,8 @@ class AIService:
                     trace.tool_calls.extend({"tool": call.get("tool", "unknown")} for call in res.tool_calls)
                 # Granska på pseudonymiserad text (återställda personnummer skulle annars se ut som
                 # siffror), återställ sedan namn och uppgifter för visning.
-                cleaned, verification = task.verify(res.data, package, store, allowed)
+                # Motpartskoder godkänns bara om de delats ut i samma körning (paket, verktyg, omförsök).
+                cleaned, verification = task.verify(res.data, package, store, allowed, guard.pseudonyms.codes())
                 cleaned = _unmask(cleaned, lambda text: guard.unmask(text, client_facing=task.spec.client_facing))
                 trace.downgraded += verification.downgraded
                 if verification.ok or attempt == self.max_attempts - 1:
@@ -306,7 +318,7 @@ class AIService:
         trace.usage = usage.to_dict()
         if result_data is None:
             fb = task.fallback(package, store)
-            result_data, verification = task.verify(fb, package, store, allowed)
+            result_data, verification = task.verify(fb, package, store, allowed, guard.pseudonyms.codes())
             trace.source = "rules"
         else:
             trace.source = "ai"

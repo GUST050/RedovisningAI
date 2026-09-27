@@ -14,6 +14,7 @@ from typing import Any
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
@@ -573,6 +574,27 @@ class AIUsage(Base):
     )
     month: Mapped[str] = mapped_column(String(7), primary_key=True)
     tokens: Mapped[int] = mapped_column(BigInteger, default=0)
+
+
+class AiDataApproval(Base):
+    """Kundens godkännande av utökat AI-underlag (plan §9.10): datatyper, leverantör och giltighet.
+    Appen återkallar i stället för att radera, så historiken finns kvar. Tabellen står inte i
+    COMPANY_TABLES: migration 0004 ger den samma RLS-policyer som kundtabellerna, eftersom 0002
+    läser listan och körs före 0004."""
+
+    __tablename__ = "ai_data_approval"
+    __table_args__ = (CheckConstraint("valid_to >= valid_from", name="ck_ai_data_approval_valid_range"),)
+    id: Mapped[uuid.UUID] = _uuid()
+    org_id: Mapped[uuid.UUID] = _org()
+    company_id: Mapped[uuid.UUID] = _company()
+    data_types: Mapped[list[Any]] = mapped_column(JSONB)
+    provider: Mapped[str] = mapped_column(String(40))
+    valid_from: Mapped[date] = mapped_column(Date)
+    valid_to: Mapped[date] = mapped_column(Date)
+    approved_by: Mapped[str] = mapped_column(String(320))
+    approved_at: Mapped[datetime] = _now()
+    revoked_by: Mapped[str | None] = mapped_column(String(320))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 # Tabeller med company_id som skyddas per klienttilldelning i RLS.

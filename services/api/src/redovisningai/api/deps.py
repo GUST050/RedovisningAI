@@ -132,6 +132,13 @@ def require_admin(principal: Principal = Depends(get_principal)) -> Principal:
     return principal
 
 
+def require_report_approver(principal: Principal = Depends(require_write)) -> Principal:
+    """Byråadmin eller behörigheten att godkänna kundrapporter (t.ex. utökat AI-underlag)."""
+    if principal.role != "ADMIN" and not principal.can_approve_reports:
+        raise HTTPException(403, "Kräver byråadmin eller behörigheten att godkänna kundrapporter")
+    return principal
+
+
 def require_aml(principal: Principal = Depends(get_principal)) -> Principal:
     if not principal.can_aml:
         raise HTTPException(403, "Kräver behörigheten PTL-ansvarig")

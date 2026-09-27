@@ -6,11 +6,13 @@ eller svaret underkänns. Orkestreringen sker i kod (ai/service.py), inte av en 
 from __future__ import annotations
 
 import json
+from collections.abc import Collection
 from dataclasses import dataclass
 from typing import Any
 
 from redovisningai.accounting.categories import DEFAULT_CATEGORIES
 from redovisningai.accounting.statements import BALANCE_LINES, INCOME_LINES
+from redovisningai.accounting.transaction_bridge import BRIDGE_VERSION
 from redovisningai.ai.providers.base import ModelTier
 from redovisningai.ai.verifier import CLAIM_SCHEMA, VerificationResult, verify_claims
 from redovisningai.analytics.finding_candidates import RULE_VERSION as FINDING_RULE_VERSION
@@ -41,7 +43,8 @@ Regler som alltid gäller:
 # is persisted with generated drafts and participates in their staleness checks.
 # A3:s paket bygger på fyndreglerna och deras prioritering, så även deras versioner ingår:
 # ändrade regler gör tidigare utkast inaktuella precis som en ändrad prompt.
-A3_PROMPT_VERSION = f"A3-v5+{FINDING_RULE_VERSION}+{PRIORITY_VERSION}"  # v5: {f:id} ersätter värdet/ordet
+# v6: transaktionsbryggan (utökat underlag) och motparter som {m:Mx}; bryggans version ingår.
+A3_PROMPT_VERSION = f"A3-v6+{FINDING_RULE_VERSION}+{PRIORITY_VERSION}+{BRIDGE_VERSION}"
 A4_PROMPT_VERSION = "A4-v2"
 A3_FINDING_LABELS = {
     "recurring_cost_change": "förändring i återkommande kostnad",
@@ -118,6 +121,10 @@ def period_commentary_input(package: dict[str, Any]) -> dict[str, Any]:
             }
         )
 
+    # Utökat underlag (bara med kundens godkännande): bryggor med koder, antal och fakta-id.
+    transactions = [_project_transaction(row) for row in package.get("transactions", [])]
+    fact_ids.update(fid for row in transactions for fid in _transaction_fact_ids(row))
+
     # Periodmognad och antal öppna allvarliga ärenden finns som interna fakta så att de kan citeras.
     maturity = package.get("maturity", {})
     open_cases = package.get("open_cases", {})
@@ -151,7 +158,7 @@ def period_commentary_input(package: dict[str, Any]) -> dict[str, Any]:
                 projected_fact["accounts"] = accounts
         facts.append(projected_fact)
 
-    return {
+    projected: dict[str, Any] = {
         "period": package.get("period"),
         "compare": package.get("compare"),
         "comparison_status": package.get("comparison_status"),
@@ -168,6 +175,38 @@ def period_commentary_input(package: dict[str, Any]) -> dict[str, Any]:
         "open_cases": {"high": int(open_cases.get("high", 0)), "fact_id": open_cases.get("high_fact_id")},
         "facts": facts,
     }
+    if "transactions" in package:
+        projected["transactions"] = transactions
+    return projected
+
+
+TRANSACTION_PART_FIELDS = (
+    "code",
+    "fact_id",
+    "current_count",
+    "previous_count",
+    "count_effect_fact_id",
+    "amount_effect_fact_id",
+)
+TRANSACTION_GROUP_FIELDS = ("code", "part", "current_count", "previous_count", "fact_id", "signals")
+
+
+def _project_transaction(row: dict[str, Any]) -> dict[str, Any]:
+    """Bara de fält som `review/transaction_package.py` avser: koder, antal och fakta-id, aldrig namn."""
+    return {
+        "target": row.get("target"),
+        "change_fact_id": row.get("change_fact_id"),
+        "parts": [{key: part.get(key) for key in TRANSACTION_PART_FIELDS} for part in row.get("parts", [])],
+        "groups": [{key: group.get(key) for key in TRANSACTION_GROUP_FIELDS} for group in row.get("groups", [])],
+        "identified_share_fact_id": row.get("identified_share_fact_id"),
+    }
+
+
+def _transaction_fact_ids(row: dict[str, Any]) -> list[str]:
+    ids = [row["change_fact_id"], row["identified_share_fact_id"]]
+    ids += [part[key] for part in row["parts"] for key in ("fact_id", "count_effect_fact_id", "amount_effect_fact_id")]
+    ids += [group["fact_id"] for group in row["groups"]]
+    return [str(fid) for fid in ids if fid]
 
 
 def claims_schema(max_items: int = 12) -> dict[str, Any]:
@@ -200,18 +239,35 @@ class AITask:
         raise NotImplementedError
 
     def verify(
-        self, output: dict[str, Any], package: dict[str, Any], store: FactStore, allowed: set[str]
+        self,
+        output: dict[str, Any],
+        package: dict[str, Any],
+        store: FactStore,
+        allowed: set[str],
+        pseudonyms: Collection[str] = frozenset(),
     ) -> tuple[dict[str, Any], VerificationResult]:
+        """`pseudonyms`: motpartskoderna som delats ut i körningen (AIService.run skickar dem)."""
         return output, VerificationResult(accepted=[])
 
 
 def _verify_claim_fields(
-    output: dict[str, Any], fields: list[str], store: FactStore, allowed: set[str], client_facing: bool
+    output: dict[str, Any],
+    fields: list[str],
+    store: FactStore,
+    allowed: set[str],
+    client_facing: bool,
+    pseudonyms: Collection[str] = frozenset(),
 ) -> tuple[dict[str, Any], VerificationResult]:
     total = VerificationResult()
     out = dict(output)
     for f in fields:
-        r = verify_claims(list(output.get(f, [])), store, client_facing=client_facing, allowed_identifiers=allowed)
+        r = verify_claims(
+            list(output.get(f, [])),
+            store,
+            client_facing=client_facing,
+            allowed_identifiers=allowed,
+            pseudonyms=pseudonyms,
+        )
         out[f] = r.accepted
         total.accepted.extend(r.accepted)
         total.rejected.extend(r.rejected)
@@ -282,7 +338,7 @@ exemplen: verifikationstyp och motpart som kod (M1, M2 …), aldrig text. Är du
             )
         return {"suggestions": out}
 
-    def verify(self, output, package, store, allowed):  # type: ignore[no-untyped-def]
+    def verify(self, output, package, store, allowed, pseudonyms=frozenset()):  # type: ignore[no-untyped-def]
         wanted = {int(a["account"]) for a in package.get("accounts", [])}
         cleaned = []
         res = VerificationResult()
@@ -371,7 +427,7 @@ med kontohistorik) och eventuella tidigare bedömningar från kundminnet.
             )
         return {"cases": cases}
 
-    def verify(self, output, package, store, allowed):  # type: ignore[no-untyped-def]
+    def verify(self, output, package, store, allowed, pseudonyms=frozenset()):  # type: ignore[no-untyped-def]
         all_ids = {f["id"] for c in package.get("cases", []) for f in c.get("findings", [])}
         severity = {f["id"]: f.get("severity") for c in package.get("cases", []) for f in c.get("findings", [])}
         seen: set[str] = set()
@@ -382,7 +438,7 @@ med kontohistorik) och eventuella tidigare bedömningar från kundminnet.
             if not ids:
                 continue
             seen.update(ids)
-            c2, r = _verify_claim_fields(c, ["root_cause", "rationale"], store, allowed, False)
+            c2, r = _verify_claim_fields(c, ["root_cause", "rationale"], store, allowed, False, pseudonyms)
             c2["finding_ids"] = ids
             if c2.get("suggestion") == "LIKELY_OK" and any(severity.get(i) == "HIGH" for i in ids):
                 c2["suggestion"] = "INVESTIGATE"
@@ -421,18 +477,24 @@ class PeriodCommentary(AITask):
         system=BASE_RULES
         + """
 
-Uppgift: skriv konsultens interna månadskommentar (4–8 påståenden) utifrån analyspaketet:
-nyckeltal, resultatbrygga, prioriterade transaktionsmönster, periodmognad och antal öppna ärenden. Börja med hur
-det går, sedan vad som förändrats och vilka konton/transaktionsmönster som bör undersökas; beskriv bara
-bokföringsmässiga effekter som stöds av bryggor och faktreferenser. Affärsorsak är alltid en hypotes,
-aldrig en slutsats från konto eller belopp ensamt. Hänvisa inte till motpart eller enskild verifikation,
-eftersom analyspaketet saknar sådana identifierare. Sedan vad
-konsulten bör kontrollera. Ta hänsyn till periodmognaden – är perioden preliminär eller
+Uppgift: skriv konsultens interna månadskommentar (4–8 meningar och högst tio påståenden) utifrån
+analyspaketet: nyckeltal, resultatbrygga, prioriterade transaktionsmönster, periodmognad, antal öppna ärenden
+och, när paketet har dem, transaktionsbryggor (transactions). Börja med hur det går, sedan vad som förändrats
+och vilka konton/transaktionsmönster som bör undersökas; beskriv bara bokföringsmässiga effekter som stöds av
+bryggor och faktreferenser. Affärsorsak är alltid en hypotes, aldrig en slutsats från konto eller belopp
+ensamt. Hänvisa aldrig till enskild verifikation, och till en motpart bara med en kod ur transactions. Sedan
+vad konsulten bör kontrollera. Ta hänsyn till periodmognaden – är perioden preliminär eller
 periodiseras kostnader bara vid bokslut ska du säga det och hänvisa till maturity.fact_id. Antalet
 öppna ärenden med hög allvarlighet har fakta-id open_cases.fact_id.
 Behöver du se vad som ligger bakom ett nyckeltals förändring: använd explain_metric_change (bidrag och
 största kontoförändringar i båda perioderna, som fakta-id). Hämta högst det som behövs – oftast ett
-nyckeltal – och beskriv bidragen som EXPLANATION med bidragets fakta-id.""",
+nyckeltal – och beskriv bidragen som EXPLANATION med bidragets fakta-id.
+transactions: högst fem förändringar med bryggdelar (both = motpart i båda perioderna, current_only = bara i
+aktuell jämförelseperiod, previous_only = bara i den tidigare perioden, unknown = okänd motpart), antal
+verifikationer per period, antals- och beloppseffekt och de största motpartsgrupperna som koder. Skriv en
+motpart som {m:Mx} och ett belopp som {f:id}. Ta bara med skillnader som går att förklara; fem är ett tak,
+inget krav. Möjliga orsaker är hypoteser. Säg rakt ut när andelen okänd motpart är stor. Skriv aldrig 'ny
+leverantör' eller 'engångspost', utan 'bara i aktuell jämförelseperiod' och 'stor enskild bokning'.""",
         schema={
             "type": "object",
             "properties": {"claims": claims_schema(10)},
@@ -503,8 +565,8 @@ nyckeltal – och beskriv bidragen som EXPLANATION med bidragets fakta-id.""",
                 c["type"] = "HYPOTHESIS"
         return {"claims": claims}
 
-    def verify(self, output, package, store, allowed):  # type: ignore[no-untyped-def]
-        return _verify_claim_fields(output, ["claims"], store, allowed, False)
+    def verify(self, output, package, store, allowed, pseudonyms=frozenset()):  # type: ignore[no-untyped-def]
+        return _verify_claim_fields(output, ["claims"], store, allowed, False, pseudonyms)
 
 
 # ============================================================================ A4 Kundmötesagent
@@ -567,8 +629,8 @@ Du får bara använda fakta i paketet (alla är godkända för kund). Ge:
         ]
         return {"summary": summary, "questions": questions, "case_questions": case_q}
 
-    def verify(self, output, package, store, allowed):  # type: ignore[no-untyped-def]
-        out, res = _verify_claim_fields(output, ["summary", "questions"], store, allowed, True)
+    def verify(self, output, package, store, allowed, pseudonyms=frozenset()):  # type: ignore[no-untyped-def]
+        out, res = _verify_claim_fields(output, ["summary", "questions"], store, allowed, True, pseudonyms)
         keys = {c["key"] for c in package.get("ask_client", [])}
         from redovisningai.ai.verifier import UNSAFE, find_literal_numbers
 
@@ -624,8 +686,8 @@ get_account_movements för ett enskilt konto. Möjliga affärsorsaker (pris, vol
             ]
         }
 
-    def verify(self, output, package, store, allowed):  # type: ignore[no-untyped-def]
-        return _verify_claim_fields(output, ["claims"], store, allowed, False)
+    def verify(self, output, package, store, allowed, pseudonyms=frozenset()):  # type: ignore[no-untyped-def]
+        return _verify_claim_fields(output, ["claims"], store, allowed, False, pseudonyms)
 
 
 # ============================================================================ A6 Motpartsresolver
@@ -679,7 +741,7 @@ motpart, kostnadskategori och konfidens 0–1.""",
             ]
         }
 
-    def verify(self, output, package, store, allowed):  # type: ignore[no-untyped-def]
+    def verify(self, output, package, store, allowed, pseudonyms=frozenset()):  # type: ignore[no-untyped-def]
         keys = {c["key"] for c in package.get("counterparties", [])}
         out = []
         for c in output.get("counterparties", []):
@@ -730,8 +792,10 @@ etiketter utan tal – hitta inte på egna siffror.""",
             )
         return {"claims": claims}
 
-    def verify(self, output, package, store, allowed):  # type: ignore[no-untyped-def]
-        return _verify_claim_fields(output, ["claims"], store, allowed | set(package.get("allowed", [])), False)
+    def verify(self, output, package, store, allowed, pseudonyms=frozenset()):  # type: ignore[no-untyped-def]
+        return _verify_claim_fields(
+            output, ["claims"], store, allowed | set(package.get("allowed", [])), False, pseudonyms
+        )
 
 
 # ============================================================================ A8 Regelbevakare
@@ -795,7 +859,7 @@ texten irrelevant: returnera en tom lista. Alla förslag granskas av en domänex
     def fallback(self, package: dict[str, Any], store: FactStore) -> dict[str, Any]:
         return {"proposals": []}
 
-    def verify(self, output, package, store, allowed):  # type: ignore[no-untyped-def]
+    def verify(self, output, package, store, allowed, pseudonyms=frozenset()):  # type: ignore[no-untyped-def]
         out = []
         for p in output.get("proposals", []):
             p = dict(p)

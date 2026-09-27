@@ -22,6 +22,7 @@ from redovisningai.analytics.finding_candidates import collect_candidates
 from redovisningai.facts.model import CALC_VERSION, FactStatus, Unit, Visibility
 from redovisningai.review.analysis import CompanyAnalysis, ReviewResult
 from redovisningai.review.finding_priorities import rank_findings
+from redovisningai.review.transaction_package import a3_transactions
 
 A3_TOOL_BUDGET = ToolBudget(max_tool_calls=2, max_iterations=2)  # oftast räcker ett nyckeltal
 
@@ -121,8 +122,12 @@ def build_commentary(
     org_id: str,
     company_id: str,
     compare_spec: str | None = None,
+    extended: bool = False,
 ) -> dict[str, Any]:
-    """Kör A3 för granskningens period och returnera utkastet med versionsmetadata (sparas av anroparen)."""
+    """Kör A3 för granskningens period och returnera utkastet med versionsmetadata (sparas av anroparen).
+
+    `extended` sätts av anroparen bara när kunden har godkänt utökat underlag för varje leverantör
+    som kan ta emot data; då får A3 även transaktionsbryggorna, med motparter som koder."""
     try:
         package = analysis.commentary_package(review, compare_spec=compare_spec)
     except ValueError as exc:
@@ -130,7 +135,11 @@ def build_commentary(
     current = analysis.period(package["period"]["spec"])
     previous = analysis.period(package["compare"]["spec"])
     package["findings"] = a3_findings(analysis, review, current, previous)
-    # Candidate facts were added to the shared, period-scoped fact store above;
+    # Samma gräns för bryggornas koder och för körningen, så att M1 är samma motpart överallt.
+    guard = EgressGuard.for_task("A3", analysis)
+    if extended:
+        package["transactions"] = a3_transactions(analysis, review, current, previous, guard.pseudonyms)
+    # Candidate and bridge facts were added to the shared, period-scoped fact store above;
     # the provider projection will retain only explicitly referenced IDs.
     package["facts"] = review.store.to_list()
     metadata: dict[str, Any] = {
@@ -142,6 +151,7 @@ def build_commentary(
         "calculation_version": CALC_VERSION,
         "prompt_version": A3_PROMPT_VERSION,
         "task": "A3",
+        "extended": extended,
     }
     ai_package = period_commentary_input(package)
     # Kontonummer från läsverktyget är identifierare; verifikationsnummer är det inte (A3:s gräns).
@@ -157,7 +167,7 @@ def build_commentary(
         allowed_identifiers=allowed,
         tools=commentary_tools(analysis, review.store, current),
         tool_budget=A3_TOOL_BUDGET,
-        egress=EgressGuard.for_task("A3", analysis),
+        egress=guard,
     )
     metadata["provider"] = out.trace.provider
     metadata["model"] = out.trace.model
