@@ -13,6 +13,7 @@ from redovisningai.accounting.comparisons import validate_comparison
 from redovisningai.accounting.metric_explanations import explain_metric
 from redovisningai.accounting.metrics import REGISTRY
 from redovisningai.accounting.periods import Period
+from redovisningai.ai.egress import EgressGuard
 from redovisningai.ai.providers.base import ToolBudget
 from redovisningai.ai.service import AIService
 from redovisningai.ai.tasks import A3_PROMPT_VERSION, period_commentary_input
@@ -156,6 +157,7 @@ def build_commentary(
         allowed_identifiers=allowed,
         tools=commentary_tools(analysis, review.store, current),
         tool_budget=A3_TOOL_BUDGET,
+        egress=EgressGuard.for_task("A3", analysis),
     )
     metadata["provider"] = out.trace.provider
     metadata["model"] = out.trace.model

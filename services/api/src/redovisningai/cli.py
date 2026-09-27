@@ -22,6 +22,7 @@ from pathlib import Path
 
 def cmd_analyze(args: argparse.Namespace) -> int:
     from redovisningai.accounting.periods import same_period_previous_year
+    from redovisningai.ai.egress import EgressGuard
     from redovisningai.ai.service import AIService
     from redovisningai.reports.builders import client_report, internal_report, statements_tables
     from redovisningai.reports.document import Table, to_pdf, to_xlsx
@@ -57,6 +58,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         review.store,
         org_id="local",
         allowed_identifiers=analysis.allowed_identifiers(),
+        egress=EgressGuard.for_task("A4", analysis),
     )
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)

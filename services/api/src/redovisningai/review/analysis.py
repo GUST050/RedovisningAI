@@ -447,6 +447,7 @@ class CompanyAnalysis:
             {k: f[k] for k in CLIENT_FACT_FIELDS if f.get(k) is not None} for f in base["facts"] if f["id"] in safe_ids
         ]
         base.pop("open_cases", None)
+        base.pop("company", None)  # kundens namn behövs inte i texten och ska inte till AI-leverantören
         base["maturity"] = {k: v for k, v in base["maturity"].items() if k != "fact_id"}  # internt faktum
         base["ask_client"] = [
             {"key": c.key, "title": c.title, "question_hint": None}

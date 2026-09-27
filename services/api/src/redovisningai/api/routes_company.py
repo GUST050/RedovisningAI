@@ -22,6 +22,7 @@ from redovisningai.accounting.metric_evidence import evidence_for_component
 from redovisningai.accounting.metric_explanations import explain_metric
 from redovisningai.accounting.metrics import REGISTRY
 from redovisningai.accounting.periods import same_period_previous_year
+from redovisningai.ai.egress import EgressGuard
 from redovisningai.analytics.budget import budget_vs_actual
 from redovisningai.analytics.finding_candidates import FindingCandidate, collect_candidates
 from redovisningai.analytics.spend import spend_report
@@ -680,7 +681,7 @@ def mapping_suggestions(company_id: uuid.UUID, principal: Principal = Depends(ge
         FactStore(),
         org_id=str(principal.org_id),
         company_id=str(company_id),
-        names_to_mask=a.ctx.person_names,
+        egress=EgressGuard.for_task("A1", a),
     )
     return {**out.data, "source": out.source}
 

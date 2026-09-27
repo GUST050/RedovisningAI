@@ -7,6 +7,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
+from redovisningai.ai.egress import EgressViolation
 from redovisningai.ai.providers.base import (
     ModelTier,
     ProviderError,
@@ -215,6 +216,8 @@ class OpenAIProvider:
                             raise ValueError("Verktygsargument är inte ett objekt")
                         output = spec.handler(arguments)
                         calls.append({"tool": item.name, "input": arguments})
+                    except EgressViolation:  # AI-gränsen stoppar hela körningen, inget skickas vidare
+                        raise
                     except (ValueError, TypeError) as exc:
                         output = {"error": f"Ogiltiga verktygsargument: {exc}"}
                     except Exception:  # verktygsfel får inte exponera data till klienten eller loggen

@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from redovisningai.ai.egress import EgressGuard
 from redovisningai.ai.providers.base import ToolBudget
 from redovisningai.ai.tasks import A3_PROMPT_VERSION, A4_PROMPT_VERSION
 from redovisningai.ai.tools import analyst_tools
@@ -362,8 +363,8 @@ def meeting(
         rev.store,
         org_id=str(principal.org_id),
         company_id=str(company_id),
-        names_to_mask=a.ctx.person_names,
         allowed_identifiers=a.allowed_identifiers(),
+        egress=EgressGuard.for_task("A4", a),
     )
     metadata["provider"] = out.trace.provider
     metadata["model"] = out.trace.model
@@ -515,7 +516,15 @@ def question_draft(
         "metrics": {},
         "facts": [],
     }
-    out = _ai(principal).run("A4", pkg, FactStore(), org_id=str(principal.org_id), company_id=str(company_id))
+    # Ärendets titel kan nämna motparter; gränsen byter dem mot koder med bokföringens namn.
+    out = _ai(principal).run(
+        "A4",
+        pkg,
+        FactStore(),
+        org_id=str(principal.org_id),
+        company_id=str(company_id),
+        egress=EgressGuard.for_task("A4", load_analysis(principal, company_id)),
+    )
     q = next((x["question"] for x in out.data.get("case_questions", []) if x["case_key"] == case_key), None)
     return {
         "text": q or f"Hej! Vi har en fråga om följande: {case.title.lower()}. Kan du berätta mer?",
@@ -621,7 +630,6 @@ def ask(company_id: uuid.UUID, body: AskIn, principal: Principal = Depends(get_p
     tools = analyst_tools(a, store, records, period)
     pkg = {
         "question": body.question,
-        "company": a.ctx.name,
         "default_period": period.spec,
         "months_with_data": [x.isoformat() for x in a.index.months_with_data()][-24:],
     }
@@ -631,10 +639,10 @@ def ask(company_id: uuid.UUID, body: AskIn, principal: Principal = Depends(get_p
         store,
         org_id=str(principal.org_id),
         company_id=str(company_id),
-        names_to_mask=a.ctx.person_names,
         allowed_identifiers=a.allowed_identifiers(),
         tools=tools,
         tool_budget=ToolBudget(max_tool_calls=8, max_iterations=6),
+        egress=EgressGuard.for_task("A5", a),
     )
     with tenant_session(principal.ctx) as s:
         repo.audit(

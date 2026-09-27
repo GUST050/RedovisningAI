@@ -21,6 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from redovisningai.accounting.periods import month, month_start
+from redovisningai.ai.egress import EgressGuard
 from redovisningai.ai.service import AIService
 from redovisningai.ai.tasks import A3_PROMPT_VERSION
 from redovisningai.cases.builder import Case
@@ -423,8 +424,8 @@ def _a2_enrichment(
         result.store,
         org_id=str(ctx.org_id),
         company_id=str(company_id),
-        names_to_mask=analysis.ctx.person_names,
         allowed_identifiers=analysis.allowed_identifiers(),
+        egress=EgressGuard.for_task("A2", analysis),
     )
     return {
         frozenset(c["finding_ids"]): {**c, "source": out.source, "trace_id": out.trace.id}

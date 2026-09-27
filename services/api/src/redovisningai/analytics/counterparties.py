@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 from redovisningai.domain.ledger import Row, Voucher
 
-_PREFIXES = [
+PREFIXES = [
     "leverantörsfaktura",
     "leverantorsfaktura",
     "lev.faktura",
@@ -68,6 +68,7 @@ class CounterpartyGuess:
     name: str  # visningsnamn
     confidence: float  # 0–1
     source: str  # "alias" | "heuristic" | "none"
+    surface: str = ""  # texten efter prefix- och brusrensning, t.ex. "Fastighets AB Kvarnen"
 
 
 def _strip_accents(s: str) -> str:
@@ -87,7 +88,7 @@ def guess_counterparty(text: str | None, aliases: dict[str, str] | None = None) 
         return CounterpartyGuess("", "", 0.0, "none")
     t = text.strip()
     low = t.lower()
-    for p in sorted(_PREFIXES, key=len, reverse=True):
+    for p in sorted(PREFIXES, key=len, reverse=True):
         if low.startswith(p + " ") or low.startswith(p + ":"):
             t = t[len(p) + 1 :].strip(" :-")
             break
@@ -97,7 +98,7 @@ def guess_counterparty(text: str | None, aliases: dict[str, str] | None = None) 
     if aliases:
         for k in (key, " ".join(key.split()[:2]), key.split()[0] if key else ""):
             if k and k in aliases:
-                return CounterpartyGuess(normalize_key(aliases[k]), aliases[k], 0.98, "alias")
+                return CounterpartyGuess(normalize_key(aliases[k]), aliases[k], 0.98, "alias", cleaned)
     if not key:
         return CounterpartyGuess("", "", 0.0, "none")
     words = cleaned.split()
@@ -108,7 +109,7 @@ def guess_counterparty(text: str | None, aliases: dict[str, str] | None = None) 
     if key.split()[0] in generic:
         return CounterpartyGuess("", "", 0.1, "none")
     confidence = 0.75 if len(key.split()) <= 3 else 0.55
-    return CounterpartyGuess(" ".join(key.split()[:2]), name, confidence, "heuristic")
+    return CounterpartyGuess(" ".join(key.split()[:2]), name, confidence, "heuristic", cleaned)
 
 
 def counterparty_for_row(voucher: Voucher, row: Row, aliases: dict[str, str] | None = None) -> CounterpartyGuess:

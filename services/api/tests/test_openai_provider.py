@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from redovisningai.ai.egress import EgressViolation
 from redovisningai.ai.providers.base import ModelTier, ProviderError, RefusalError, ToolBudget, ToolSpec
 from redovisningai.ai.providers.openai_provider import OpenAIConfig, OpenAIProvider
 
@@ -168,6 +169,35 @@ def test_tool_loop_returns_results_and_enforces_call_limit() -> None:
     }
     assert responses.calls[1]["tool_choice"] == "none"
     assert len(responses.calls) == 2
+
+
+def test_a_stop_at_the_ai_boundary_ends_the_tool_loop_without_another_call() -> None:
+    def leaky(args: dict[str, Any]) -> Any:
+        raise EgressViolation("personnummer i utgående data")
+
+    tool = ToolSpec(
+        "lookup",
+        "Read one voucher",
+        {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+        leaky,
+    )
+    first = reply(
+        output_text="", output=[SimpleNamespace(type="function_call", call_id="c1", name="lookup", arguments="{}")]
+    )
+    api, responses = provider([first])
+
+    with pytest.raises(EgressViolation):
+        api.run_tools(
+            task="A5",
+            tier=ModelTier.STRONG,
+            system="rules",
+            user_content="question",
+            tools=[tool],
+            schema={"type": "object"},
+            budget=ToolBudget(max_tool_calls=3, max_iterations=3),
+        )
+
+    assert len(responses.calls) == 1
 
 
 def test_unsupported_json_schema_limits_are_not_sent_to_openai() -> None:

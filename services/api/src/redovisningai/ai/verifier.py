@@ -12,6 +12,7 @@ Regler (deterministiska):
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -70,8 +71,16 @@ class VerificationResult:
     def ok(self) -> bool:
         return not self.rejected
 
-    def feedback(self) -> str:
-        return "\n".join(f'- "{r.claim.get("text", "")[:120]}": {r.reason}' for r in self.rejected)
+    def feedback(self, mask: Callable[[str], str] | None = None) -> str:
+        """Underkända påståenden till omförsöket. `mask` maskerar den citerade texten, och skälet som
+        kan citera modellens egna fakta-id, före avkortningen så att inget namn kapas halvvägs."""
+        lines = []
+        for r in self.rejected:
+            text, reason = str(r.claim.get("text", "")), r.reason
+            if mask is not None:
+                text, reason = mask(text), mask(reason)
+            lines.append(f'- "{text[:120]}": {reason}')
+        return "\n".join(lines)
 
 
 def _allowed_number(token: str, allowed: set[str]) -> bool:

@@ -17,6 +17,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
+from redovisningai.ai.egress import EgressViolation
 from redovisningai.ai.providers.base import (
     ModelTier,
     ProviderError,
@@ -248,6 +249,8 @@ class AnthropicProvider:
                     content = json.dumps(output, ensure_ascii=False, default=str)
                     results.append({"type": "tool_result", "tool_use_id": block.id, "content": content})
                     calls.append({"tool": block.name, "input": dict(block.input)})
+                except EgressViolation:  # AI-gränsen stoppar hela körningen, inget skickas vidare
+                    raise
                 except Exception as exc:  # verktygsfel skickas tillbaka, loopen fortsätter
                     log.warning("Verktyget %s misslyckades: %s", block.name, exc)
                     results.append(

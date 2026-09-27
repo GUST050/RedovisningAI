@@ -22,7 +22,9 @@ from redovisningai.accounting.metric_explanations import MetricComponent, Metric
 from redovisningai.accounting.metrics import REGISTRY
 from redovisningai.accounting.periods import month
 from redovisningai.accounting.statements import StatementMapping
+from redovisningai.ai.egress import EgressGuard
 from redovisningai.ai.service import AIService, FakeProvider, InMemoryBudget
+from redovisningai.ai.tasks import period_commentary_input
 from redovisningai.ai.verifier import find_literal_numbers
 from redovisningai.analytics.finding_candidates import FindingCandidate, collect_candidates
 from redovisningai.devdata.finding_cases import TRANSACTION_CODES, LockedCase, locked_cases, reversal
@@ -299,11 +301,13 @@ def run_evals(service: AIService, *, as_of: date = date(2026, 10, 12), period: s
         restricted = {f.id for f in rev.store if f.visibility is not Visibility.CLIENT_SAFE}
 
         for code, pkg, client in (
-            ("A3", an.commentary_package(rev), False),
+            ("A3", period_commentary_input(an.commentary_package(rev)), False),  # samma projektion som appen
             ("A4", an.client_package(rev), True),
             ("A2", an.case_package(rev), False),
         ):
-            out = service.run(code, pkg, rev.store, org_id="eval", allowed_identifiers=allowed)
+            out = service.run(
+                code, pkg, rev.store, org_id="eval", allowed_identifiers=allowed, egress=EgressGuard.for_task(code, an)
+            )
             claims = _claims(out.data)
             literal = sum(len(find_literal_numbers(c["text"], allowed)) for c in claims)
             attempts = out.trace.attempts or 1
@@ -336,7 +340,7 @@ def run_evals(service: AIService, *, as_of: date = date(2026, 10, 12), period: s
         accounts = [
             {"account": a.number, "name": a.name, "examples": []} for a in list(g.ledger.accounts.values())[:25]
         ]
-        out = service.run("A1", {"accounts": accounts}, rev.store, org_id="eval")
+        out = service.run("A1", {"accounts": accounts}, rev.store, org_id="eval", egress=EgressGuard.for_task("A1", an))
         sm = StatementMapping()
         correct = sum(1 for s in out.data["suggestions"] if s["legal_line"] == sm.line_for(s["account"]))
         acc = correct / len(accounts) if accounts else 1.0

@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from redovisningai.ai.egress import EgressViolation
 from redovisningai.ai.providers.anthropic_provider import AnthropicConfig, AnthropicProvider
 from redovisningai.ai.providers.base import (
     FailoverProvider,
@@ -154,7 +155,7 @@ def test_ai_trace_redacts_payload_output_rejection_text_and_tool_arguments() -> 
     traces = []
     service = AIService(provider, trace_sink=traces.append, keep_payloads=False)
 
-    outcome = service.run("A3", {"company": "Hemligt AB"}, FactStore(), org_id="org-1")
+    outcome = service.run("A3", period_commentary_input({"company": "Hemligt AB"}), FactStore(), org_id="org-1")
 
     assert outcome.trace.package is None
     assert outcome.trace.output is None
@@ -395,7 +396,7 @@ def test_service_without_provider_uses_rules(analysis, review) -> None:  # type:
 
 
 def test_service_regenerates_then_drops_bad_claims(analysis, review) -> None:  # type: ignore[no-untyped-def]
-    pkg = analysis.commentary_package(review)
+    pkg = period_commentary_input(analysis.commentary_package(review))
     fid = pkg["metrics"]["net_sales"]["id"]
     attempts = {"n": 0}
 
@@ -434,7 +435,7 @@ def test_service_test_limits_one_attempt_and_output_tokens(analysis, review) -> 
         {"A3": lambda _: {"claims": [{"type": "OBSERVATION", "text": "Omsättningen ökade 17 %.", "fact_ids": []}]}}
     )
     out = AIService(prov, max_output_tokens=1_500, max_attempts=1).run(
-        "A3", analysis.commentary_package(review), review.store, org_id="o1"
+        "A3", period_commentary_input(analysis.commentary_package(review)), review.store, org_id="o1"
     )
     assert seen == [1_500]
     assert out.trace.attempts == 1
@@ -613,6 +614,29 @@ def test_anthropic_tool_loop_with_budget() -> None:
     assert len(msgs.calls[1]["messages"][-1]["content"]) == 2
     assert msgs.calls[2].get("tool_choice") == {"type": "none"}
     assert res.data == {"claims": []} and len(res.tool_calls) == 2
+
+
+def test_anthropic_tool_loop_stops_at_the_ai_boundary() -> None:
+    def leaky(_: dict[str, Any]) -> Any:
+        raise EgressViolation("personnummer i utgående data")
+
+    tool = ToolSpec(
+        "t", "d", {"type": "object", "properties": {}, "required": [], "additionalProperties": False}, leaky
+    )
+    prov, msgs = _provider([_resp("tool_use", [_Block("tool_use", id="1", name="t")])])
+
+    with pytest.raises(EgressViolation):
+        prov.run_tools(
+            task="A5",
+            tier=ModelTier.STRONG,
+            system="S",
+            user_content="Q",
+            tools=[tool],
+            schema={},
+            budget=ToolBudget(),
+        )
+
+    assert len(msgs.calls) == 1  # verktygssvaret skickas aldrig till modellen
 
 
 def test_failover_provider() -> None:

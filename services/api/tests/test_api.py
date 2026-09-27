@@ -477,3 +477,27 @@ def test_review_run_queues_the_ai_instead_of_running_it(env, monkeypatch) -> Non
     assert r.status_code == 200, r.text
     assert r.json() == {"reviewed": ["2026-09"], "ai_queued": True}
     assert queued == [["2026-09"]]
+
+
+@pytest.mark.parametrize(
+    ("task", "path", "body"),
+    [
+        ("A3", "/periods/2026-09/commentary", None),
+        ("A4", "/periods/2026-09/meeting", None),
+        ("A5", "/ask", {"question": "Vilka leverantörer ökade mest?"}),
+    ],
+)
+def test_ai_routes_send_through_the_counterparty_guard(env, monkeypatch, task, path, body) -> None:  # type: ignore[no-untyped-def]
+    cl, cid = env["client"], env["cid"]
+    guards = {}
+    real_run = AIService.run
+
+    def spy(self, task_code, package, store, **kwargs):  # type: ignore[no-untyped-def]
+        guards[task_code] = kwargs.get("egress")
+        return real_run(self, task_code, package, store, **kwargs)
+
+    monkeypatch.setattr(AIService, "run", spy)
+    response = cl.post(f"/api/companies/{cid}{path}", headers=H("kalle@api.se"), json=body)
+
+    assert response.status_code == 200
+    assert guards[task] is not None and guards[task].pseudonyms.known_names()

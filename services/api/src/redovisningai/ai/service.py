@@ -1,5 +1,5 @@
-"""Orkestrering av AI-uppgifter: pseudonymisering → modell → granskare → ev. omskrivning →
-reservvariant. Allt loggas som spår (utan att lagra mer än nödvändigt)."""
+"""Orkestrering av AI-uppgifter: AI-gränsen (pseudonymer och kontroll av varje sändning) → modell →
+granskare → ev. omskrivning → reservvariant. Allt loggas som spår (utan att lagra mer än nödvändigt)."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Protocol
 
+from redovisningai.ai.egress import EgressGuard, EgressViolation
 from redovisningai.ai.providers.base import (
     ModelProvider,
     ModelTier,
@@ -20,12 +21,13 @@ from redovisningai.ai.providers.base import (
     ToolSpec,
     Usage,
 )
-from redovisningai.ai.pseudonymize import Pseudonymizer
 from redovisningai.ai.tasks import TASKS, AITask
 from redovisningai.ai.verifier import VerificationResult, render_claims
 from redovisningai.facts.model import FactStore
 
 log = logging.getLogger(__name__)
+
+EGRESS_STOPPED = "AI-gränsen stoppade sändningen"
 
 
 class BudgetTracker(Protocol):
@@ -112,14 +114,20 @@ class AIOutcome:
         }
 
 
-def _unmask(obj: Any, p: Pseudonymizer) -> Any:
+def _unmask(obj: Any, restore: Callable[[str], str]) -> Any:
     if isinstance(obj, str):
-        return p.unmask(obj)
+        return restore(obj)
     if isinstance(obj, list):
-        return [_unmask(x, p) for x in obj]
+        return [_unmask(x, restore) for x in obj]
     if isinstance(obj, dict):
-        return {k: _unmask(v, p) for k, v in obj.items()}
+        return {k: _unmask(v, restore) for k, v in obj.items()}
     return obj
+
+
+def _stop_at_boundary(trace: AITrace) -> None:
+    # Bara uppgiftskoden loggas: det som stoppades är just det som inte får spridas.
+    trace.error = EGRESS_STOPPED
+    log.warning("AI-gränsen stoppade sändningen för uppgift %s", trace.task)
 
 
 CLAIM_FIELDS = ("claims", "summary", "questions", "root_cause", "rationale")
@@ -176,12 +184,17 @@ class AIService:
         allowed_identifiers: set[str] | None = None,
         tools: list[ToolSpec] | None = None,
         tool_budget: ToolBudget | None = None,
+        egress: EgressGuard | None = None,
     ) -> AIOutcome:
         task: AITask = TASKS[task_code]
         allowed = set(allowed_identifiers or set())
-        pseudo = Pseudonymizer(names_to_mask or [])
-        content = pseudo.mask(task.user_content(package))
-        input_hash = hashlib.sha256(content.encode()).hexdigest()[:16]
+        guard = egress or EgressGuard.for_task(task_code, None, person_names=names_to_mask or [])
+        content: str | None
+        try:
+            content = task.user_content(guard.prepare_package(package))
+        except EgressViolation:
+            content = None  # stoppas nedan, innan något skickas
+        input_hash = hashlib.sha256((content or "").encode()).hexdigest()[:16]
         trace = AITrace(
             id=str(uuid.uuid4()),
             task=task_code,
@@ -207,7 +220,10 @@ class AIService:
             trace.error = "AI ej konfigurerad"
         elif not self.budget.allow(org_id, task_code):
             trace.error = "AI-budgeten för månaden är förbrukad"
+        elif content is None:
+            _stop_at_boundary(trace)
         else:
+            wrapped_tools = [guard.wrap_tool(t) for t in tools or []]
             feedback = ""
             for attempt in range(self.max_attempts):
                 trace.attempts = attempt + 1
@@ -221,13 +237,14 @@ class AIService:
                     )
                 )
                 try:
+                    guard.ensure_clean(user)
                     if task.spec.uses_tools:
                         res = self.provider.run_tools(
                             task=task_code,
                             tier=task.spec.tier,
                             system=task.spec.system,
                             user_content=user,
-                            tools=tools or [],
+                            tools=wrapped_tools,
                             schema=task.spec.schema,
                             budget=ToolBudget(
                                 max_tool_calls=min((tool_budget or ToolBudget()).max_tool_calls, self.max_tool_calls)
@@ -252,6 +269,9 @@ class AIService:
                             if self.max_output_tokens is not None
                             else task.spec.max_tokens,
                         )
+                except EgressViolation:  # från sändningen eller ett verktyg: inga fler anrop
+                    _stop_at_boundary(trace)
+                    break
                 except ProviderError as exc:
                     usage.add(exc.usage)  # ett avbrutet eller oanvändbart svar debiteras ändå
                     trace.error = f"{type(exc).__name__}: {exc}"
@@ -268,7 +288,7 @@ class AIService:
                 # Granska på pseudonymiserad text (återställda personnummer skulle annars se ut som
                 # siffror), återställ sedan namn och uppgifter för visning.
                 cleaned, verification = task.verify(res.data, package, store, allowed)
-                cleaned = _unmask(cleaned, pseudo)
+                cleaned = _unmask(cleaned, lambda text: guard.unmask(text, client_facing=task.spec.client_facing))
                 trace.downgraded += verification.downgraded
                 if verification.ok or attempt == self.max_attempts - 1:
                     trace.rejected = [
@@ -281,7 +301,7 @@ class AIService:
                     ]
                     result_data = cleaned
                     break
-                feedback = verification.feedback()
+                feedback = verification.feedback(mask=guard.mask_text)
             self.budget.record(org_id, task_code, usage)
         trace.usage = usage.to_dict()
         if result_data is None:
