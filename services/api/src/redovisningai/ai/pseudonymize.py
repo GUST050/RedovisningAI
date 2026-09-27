@@ -41,19 +41,27 @@ class Pseudonymizer:
         self._reverse[tok] = value
         return tok
 
-    def mask(self, text: str) -> str:
+    def mask_identifiers(self, text: str) -> str:
+        """Maskera personnummer, e-post och telefon före överlappande namnmatchning."""
+
         def pnr(m: re.Match[str]) -> str:
             digits = m.group(1) + m.group(2)
             return self._token("PNR", m.group(0)) if luhn_ok(digits) else m.group(0)
 
         out = PNR.sub(pnr, text)
         out = EMAIL.sub(lambda m: self._token("EMAIL", m.group(0)), out)
-        out = PHONE.sub(lambda m: self._token("TEL", m.group(0)), out)
+        return PHONE.sub(lambda m: self._token("TEL", m.group(0)), out)
+
+    def mask_names(self, text: str) -> str:
+        out = text
         for name in self._names:
             out = re.sub(
                 rf"\b{re.escape(name)}{WORD_END}", lambda m: self._token("PERSON", m.group(0)), out, flags=re.I
             )
         return out
+
+    def mask(self, text: str) -> str:
+        return self.mask_names(self.mask_identifiers(text))
 
     def unmask(self, text: str) -> str:
         for tok in sorted(self._reverse, key=len, reverse=True):

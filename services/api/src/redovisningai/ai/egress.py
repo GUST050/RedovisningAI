@@ -179,7 +179,9 @@ class EgressGuard:
         return {key: self._mask_values(value) for key, value in package.items()}
 
     def mask_text(self, text: str) -> str:
-        return self.pseudonyms.mask(self.pseudo.mask(text))
+        # Identifiers first, then complete counterparties, then person names. Replacing
+        # "Erik" before a known counterparty "Erik Andersson" would leak the surname.
+        return self.pseudo.mask_names(self.pseudonyms.mask(self.pseudo.mask_identifiers(text)))
 
     def ensure_clean(self, text: str) -> None:
         """Sista kontrollen före en sändning. Namn maskeras i värdena, så fast prompttext och

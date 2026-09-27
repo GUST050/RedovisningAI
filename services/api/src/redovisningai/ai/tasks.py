@@ -45,7 +45,8 @@ Regler som alltid gäller:
 # ändrade regler gör tidigare utkast inaktuella precis som en ändrad prompt.
 # v6: transaktionsbryggan (utökat underlag) och motparter som {m:Mx}; bryggans version ingår.
 A3_PROMPT_VERSION = f"A3-v6+{FINDING_RULE_VERSION}+{PRIORITY_VERSION}+{BRIDGE_VERSION}"
-A4_PROMPT_VERSION = "A4-v2"
+# v3: kundsäkra transaktionsbryggor och separat godkända ärendefrågor.
+A4_PROMPT_VERSION = f"A4-v3+{BRIDGE_VERSION}"
 A3_FINDING_LABELS = {
     "recurring_cost_change": "förändring i återkommande kostnad",
     "transaction_frequency_change": "ändrad verifikationsfrekvens",

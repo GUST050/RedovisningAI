@@ -56,6 +56,21 @@ def test_a5_tools_send_codes_not_counterparty_names_or_voucher_text(analysis) ->
     assert '"text"' not in json.dumps(outputs, ensure_ascii=False)
 
 
+def test_person_name_inside_counterparty_is_fully_masked_in_real_a5_tool() -> None:
+    ledger = _ledger("Leverantörsfaktura Erik Andersson")
+    ctx = CompanyContext("c", "o", ledger.company_name, CompanySettings(), person_names=["Erik"])
+    analysis = CompanyAnalysis(ledger, ctx)
+    guard = EgressGuard.for_task("A5", analysis)
+    output = _tools(analysis, guard)["get_counterparty_spend"].handler({"period": "2026-09"})
+
+    assert "Erik" not in strings(output)
+    assert "Andersson" not in strings(output)
+    assert "M1" in strings(output)
+    masked_question = guard.mask_text("Erik Andersson, mejl erik.andersson@example.com")
+    assert "M1" in masked_question and "EMAIL_1" in masked_question
+    assert "Andersson" not in masked_question and "example.com" not in masked_question
+
+
 def test_a_counterparty_keeps_its_code_across_tool_calls_and_periods(analysis) -> None:  # type: ignore[no-untyped-def]
     guard = EgressGuard.for_task("A5", analysis)
     spend = _tools(analysis, guard)["get_counterparty_spend"]

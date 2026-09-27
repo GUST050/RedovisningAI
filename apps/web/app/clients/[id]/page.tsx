@@ -41,7 +41,7 @@ function ClientWorkspace() {
   const tab = search.get("tab") ?? "overview";
   const [view, setView] = useState<View | null>(null);
   const [month, setMonth] = useState<string | null>(search.get("period"));
-  const [voucher, setVoucher] = useState<{ key: string; hint?: string } | null>(null);
+  const [voucher, setVoucher] = useState<{ key: string; hint?: string; sourceLine?: number } | null>(null);
   const [nonce, setNonce] = useState(0);
 
   const company = useLoad<Company>(`${base}?n=${nonce}`);
@@ -83,7 +83,7 @@ function ClientWorkspace() {
           spec: effView === "month" ? effMonth : `${effView}:${effMonth}`,
           months,
           base,
-          openVoucher: (key, hint) => setVoucher({ key, hint }),
+          openVoucher: (key, hint, sourceLine) => setVoucher({ key, hint, sourceLine }),
           refresh: () => setNonce((n) => n + 1),
         }
       : null;
@@ -185,7 +185,7 @@ function ClientWorkspace() {
           {tab === "settings" && <SettingsTab base={base} company={company.data} onSaved={() => setNonce((n) => n + 1)} />}
         </ClientContext.Provider>
       )}
-      <VoucherModal base={base} voucherKey={voucher?.key ?? null} hint={voucher?.hint} onClose={() => setVoucher(null)} />
+      <VoucherModal base={base} voucherKey={voucher?.key ?? null} hint={voucher?.hint} sourceLine={voucher?.sourceLine} onClose={() => setVoucher(null)} />
     </div>
   );
 }

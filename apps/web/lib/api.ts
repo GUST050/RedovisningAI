@@ -228,8 +228,8 @@ export interface BridgeGroup {
   current_count: number;
   previous_count: number;
   signals: BridgeSignal[];
-  current_vouchers: [string, string][];
-  previous_vouchers: [string, string][];
+  current_vouchers: [string, string, number][];
+  previous_vouchers: [string, string, number][];
   fact_id: string;
 }
 export interface TransactionBridge {

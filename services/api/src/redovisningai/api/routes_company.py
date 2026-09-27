@@ -556,11 +556,11 @@ def transaction_bridge_route(
         pair = comparison_pair(current, mode, a.ledger, a.index)
         accounts, sign = a.target_accounts(target)
         _validate_bridge_target(a, target, accounts)
+        bridge = transaction_bridge(
+            a.index, accounts, pair, target=target, aliases=a.ctx.aliases, sign=sign, store=FactStore()
+        )
     except (ValueError, KeyError) as exc:
-        raise HTTPException(422, f"Okänt mål eller period: {target}") from exc
-    bridge = transaction_bridge(
-        a.index, accounts, pair, target=target, aliases=a.ctx.aliases, sign=sign, store=FactStore()
-    )
+        raise HTTPException(422, str(exc.args[0]) if exc.args else str(exc)) from exc
     payload = bridge.to_dict()
     masked = any(account in PAYROLL for account in accounts) and not principal.can_payroll
     if masked:
@@ -705,12 +705,27 @@ def voucher(
     key: str,
     period: str | None = None,
     on: date | None = None,
+    source_line: int | None = Query(default=None, ge=0),
     principal: Principal = Depends(get_principal),
 ) -> dict[str, Any]:
     """Verifikationsnummer börjar om varje räkenskapsår. `on` (datum) eller `period` avgör året;
     utan dem används det senaste året där numret finns. Återanvänds numret inom året väljs den
     verifikation som har exakt `on`-datumet först."""
     a = load_analysis(principal, company_id)
+    if source_line is not None:
+        if on is None:
+            raise HTTPException(422, "SIE-rad kräver ett exakt datum")
+        exact = next(
+            (
+                v
+                for v in a.ledger.all_vouchers()
+                if str(v.key) == key and v.date == on and (v.source_line or 0) == source_line
+            ),
+            None,
+        )
+        if exact is None:
+            raise HTTPException(404, "Verifikationen finns inte")
+        return voucher_view(exact, a.ledger, include_payroll_rows=principal.can_payroll)
     anchor = on
     if anchor is None and period:
         anchor = _period(a, period).end

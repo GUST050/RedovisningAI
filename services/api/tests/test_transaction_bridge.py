@@ -1,8 +1,10 @@
 from datetime import date
 from decimal import Decimal
 
+import pytest
+
 from redovisningai.accounting.balances import LedgerIndex
-from redovisningai.accounting.comparisons import ComparisonPair
+from redovisningai.accounting.comparisons import ComparisonPair, validate_comparison
 from redovisningai.accounting.periods import month
 from redovisningai.accounting.transaction_bridge import TransactionBridge, transaction_bridge
 from redovisningai.accounting.variance import drilldown
@@ -144,6 +146,104 @@ def test_large_booking_is_judged_per_account_not_per_target_basket() -> None:
     )
 
     assert bridge.signals == {"large_booking": Decimal("20000")}
+
+
+def test_large_booking_badge_does_not_spread_to_other_account_in_same_voucher() -> None:
+    vouchers = [
+        Voucher(
+            "A",
+            "1",
+            date(2026, 9, 10),
+            "Faktura",
+            (
+                Row(6110, Decimal("20000"), text="Big Firm"),
+                Row(6540, Decimal("100"), text="Tiny Firm"),
+                Row(1930, Decimal("-20100")),
+            ),
+        ),
+        Voucher(
+            "A",
+            "2",
+            date(2026, 9, 20),
+            "Faktura",
+            (
+                Row(6540, Decimal("900"), text="Tiny Firm"),
+                Row(1930, Decimal("-900")),
+            ),
+        ),
+    ]
+    index = _index(vouchers)
+    bridge = transaction_bridge(
+        index, {6110, 6540}, PAIR, target="line:other_external", aliases={}, sign=1, store=FactStore()
+    )
+
+    groups = {group.name: group for group in bridge.groups}
+    assert "large_booking" in groups["Big Firm"].signals
+    assert "large_booking" not in groups["Tiny Firm"].signals
+    assert bridge.signals["large_booking"] == Decimal("20000")
+
+
+def test_summary_only_comparison_cannot_claim_a_transaction_bridge() -> None:
+    accounts = {n: Account(n, f"Konto {n}") for n in (1930, 6110)}
+    prior = YearData(
+        FiscalYear(date(2025, 1, 1), date(2025, 12, 31)),
+        period_balances={(date(2025, 9, 1), 6110): Decimal("800")},
+        has_vouchers=False,
+    )
+    current = YearData(
+        FiscalYear(date(2026, 1, 1), date(2026, 12, 31)),
+        [
+            Voucher(
+                "A",
+                "1",
+                date(2026, 9, 1),
+                "Faktura",
+                (
+                    Row(6110, Decimal("1000"), text="Firm"),
+                    Row(1930, Decimal("-1000")),
+                ),
+            ),
+        ],
+    )
+    index = LedgerIndex.build(Ledger("Syntetbolaget AB", None, accounts, [prior, current]))
+    pair = validate_comparison(month(2026, 9), month(2025, 9), index)
+    assert pair.status is FactStatus.CALCULATED
+    assert index.movement({6110}, pair.current) - index.movement({6110}, pair.previous) == Decimal("200")
+
+    with pytest.raises(ValueError, match="verifikationer"):
+        transaction_bridge(index, {6110}, pair, target="account:6110", aliases={}, sign=1, store=FactStore())
+
+
+def test_reused_same_day_vouchers_have_distinct_drillthrough_references() -> None:
+    vouchers = [
+        Voucher(
+            "A",
+            "1",
+            date(2026, 9, 1),
+            "Faktura",
+            (
+                Row(6110, Decimal("100"), text="Firm"),
+                Row(1930, Decimal("-100")),
+            ),
+            source_line=1,
+        ),
+        Voucher(
+            "A",
+            "1",
+            date(2026, 9, 1),
+            "Faktura",
+            (
+                Row(6110, Decimal("200"), text="Firm"),
+                Row(1930, Decimal("-200")),
+            ),
+            source_line=10,
+        ),
+    ]
+    bridge = _bridge(vouchers)
+    refs = bridge.groups[0].current_vouchers
+
+    assert len(refs) == 2
+    assert set(refs) == {("A1", "2026-09-01", 1), ("A1", "2026-09-01", 10)}
 
 
 def test_bridge_facts_never_collide_with_drilldown_facts_for_the_same_account() -> None:

@@ -12,7 +12,7 @@ from typing import Any
 
 from redovisningai.accounting.comparisons import validate_comparison
 from redovisningai.accounting.periods import Period
-from redovisningai.accounting.transaction_bridge import TransactionBridge, transaction_bridge
+from redovisningai.accounting.transaction_bridge import TransactionBridge, bridge_unavailable_reason, transaction_bridge
 from redovisningai.accounting.variance import result_bridge
 from redovisningai.ai.egress import CounterpartyPseudonyms
 from redovisningai.facts.model import FactStore
@@ -50,6 +50,8 @@ def a3_transactions(
 ) -> list[dict[str, Any]]:
     """Bryggorna för de största förändringarna, med motparter som koder ur samma körnings pseudonymer."""
     pair = validate_comparison(current, previous, analysis.index)
+    if bridge_unavailable_reason(analysis.index, pair):
+        return []
     rows = []
     for target in select_changes(analysis, current, previous, limit=limit):
         accounts, sign = _bridge_accounts(analysis, target)
@@ -67,6 +69,8 @@ def a4_transaction_summary(
     namn och ingen text. Faktumen läggs i granskningens faktalager (`review.store`), där verifieraren
     och kundpaketets facts-lista slår upp dem."""
     pair = validate_comparison(current, previous, analysis.index)
+    if bridge_unavailable_reason(analysis.index, pair):
+        return []
     rows = []
     for target in select_changes(analysis, current, previous):
         accounts, sign = _bridge_accounts(analysis, target)

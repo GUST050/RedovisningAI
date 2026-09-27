@@ -33,7 +33,7 @@ export type ClientCtx = {
   spec: string;
   months: string[];
   /** `hint` är en period ("2026-03") eller ett datum ("2026-03-14") som avgör räkenskapsåret. */
-  openVoucher: (key: string, hint?: string) => void;
+  openVoucher: (key: string, hint?: string, sourceLine?: number) => void;
   refresh: () => void;
   base: string;
 };
@@ -72,8 +72,11 @@ type VoucherView = {
   payroll_rows_masked?: boolean;
 };
 
-export function VoucherModal({ base, voucherKey, hint, onClose }: { base: string; voucherKey: string | null; hint?: string; onClose: () => void }) {
-  const q = !hint ? "" : /^\d{4}-\d{2}-\d{2}$/.test(hint) ? `?on=${hint}` : `?period=${encodeURIComponent(hint)}`;
+export function VoucherModal({ base, voucherKey, hint, sourceLine, onClose }: { base: string; voucherKey: string | null; hint?: string; sourceLine?: number; onClose: () => void }) {
+  const on = hint && /^\d{4}-\d{2}-\d{2}$/.test(hint);
+  const q = !hint ? "" : on
+    ? `?on=${hint}${sourceLine === undefined ? "" : `&source_line=${sourceLine}`}`
+    : `?period=${encodeURIComponent(hint)}`;
   const { data, error } = useLoad<VoucherView>(voucherKey ? `${base}/vouchers/${encodeURIComponent(voucherKey)}${q}` : null);
   return (
     <Modal title={`Verifikation ${voucherKey ?? ""}`} open={!!voucherKey} onClose={onClose}>
@@ -115,10 +118,10 @@ export function VoucherModal({ base, voucherKey, hint, onClose }: { base: string
   );
 }
 
-export function VoucherLink({ v, hint }: { v: string; hint?: string }) {
+export function VoucherLink({ v, hint, sourceLine }: { v: string; hint?: string; sourceLine?: number }) {
   const { openVoucher } = useClient();
   return (
-    <button className="focus-ring font-mono text-[12px] text-brand hover:underline" onClick={() => openVoucher(v, hint)}>
+    <button className="focus-ring font-mono text-[12px] text-brand hover:underline" onClick={() => openVoucher(v, hint, sourceLine)}>
       {v}
     </button>
   );

@@ -91,9 +91,12 @@ def _explain_transactions_tool(analysis: CompanyAnalysis, store: FactStore, defa
         if not accounts:
             return {"error": "Lönekonton förklaras inte för AI"}
         pair = validate_comparison(current, previous, analysis.index)
-        bridge = transaction_bridge(
-            analysis.index, accounts, pair, target=target, aliases=analysis.ctx.aliases, sign=sign, store=store
-        )
+        try:
+            bridge = transaction_bridge(
+                analysis.index, accounts, pair, target=target, aliases=analysis.ctx.aliases, sign=sign, store=store
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
         return {
             "change_fact_id": bridge.change_fact_id,
             "parts": [

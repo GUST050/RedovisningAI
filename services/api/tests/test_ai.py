@@ -23,7 +23,7 @@ from redovisningai.ai.providers.base import (
 )
 from redovisningai.ai.pseudonymize import Pseudonymizer, luhn_ok
 from redovisningai.ai.service import AIService, FakeProvider, InMemoryBudget
-from redovisningai.ai.tasks import period_commentary_input
+from redovisningai.ai.tasks import A4_PROMPT_VERSION, period_commentary_input
 from redovisningai.ai.tools import analyst_tools
 from redovisningai.ai.verifier import find_literal_numbers, verify_claims
 from redovisningai.devdata.generator import DEMO_PROFILES, generate
@@ -183,6 +183,20 @@ def analysis() -> CompanyAnalysis:
 @pytest.fixture(scope="module")
 def review(analysis):  # type: ignore[no-untyped-def]
     return analysis.review(analysis.period("2026-09"))
+
+
+def test_pre_bridge_a4_draft_is_stale_after_prompt_and_bridge_change(analysis) -> None:  # type: ignore[no-untyped-def]
+    current = analysis.period("2026-09")
+    previous = analysis.period("2025-09")
+    legacy = {
+        "period": current.spec,
+        "compare_period": previous.spec,
+        "prompt_version": "A4-v2",
+        "source_fingerprint": analysis.source_fingerprint(current, previous, prompt_version="A4-v2"),
+    }
+
+    assert not analysis.draft_is_current(legacy, prompt_version=A4_PROMPT_VERSION)
+    assert "transaction-bridge-v1" in A4_PROMPT_VERSION
 
 
 # ------------------------------------------------------------------ granskaren

@@ -1157,8 +1157,8 @@ produktkod ändras först efter att genomförandeplanen godkänts separat.
 ## 9.10 Transaktionsbrygga och gemensam AI-gräns (design 2026-09-27)
 
 **Status 2026-09-28:** Task 11–16 är implementerade och lokalt verifierade; Task 17:s lokala
-kalibreringsverktyg är implementerat. Slutligt val av gräns inväntar konsultens val av avslutade
-kundperioder och slutgranskningen av hela grenen. Bygger på §9.7–9.8 och
+kalibreringsverktyg är implementerat. Slutgranskningen av hela grenen gjordes och fem upptäckta
+fel rättades. Slutligt val av gräns inväntar konsultens val av avslutade kundperioder. Bygger på §9.7–9.8 och
 kompletterar §9.9. Målet är att AI:n ska förklara hur transaktionerna skiljer sig mellan perioderna –
 inte bara nyckeltalen – utan att räkna själv och utan att motpartsnamn eller fritext lämnar byrån.
 Upplägget valdes framför fler summor per fynd (§9.9) och framför att låta modellen läsa
@@ -2267,6 +2267,17 @@ var gröna. Nexts standardbygge med Turbopack kunde inte starta sin CSS-process 
 Låsta AI-evalfall var gröna. I en 375 px bred syntetisk webbläsarvy gick bryggan att nå med
 tangentbord, verifikationslänkarna fick fokus och tabellen scrollade inom sidans bredd;
 inställningen för utökat AI-underlag visades utan att godkännande aktiverades.
+
+**Slutgranskning:** Fem fel rättades efter genomgång av hela grenen. AI-gränsen maskerar nu
+fullständiga motpartsnamn före överlappande personnamn, med personnummer/e-post/telefon först.
+Transaktionsbryggan kräver verifikationsunderlag i båda perioderna och stämmer sin förändring mot
+kontorörelsen; PSALDO-/sammandragsperioder får inget påhittat transaktionssvar i A3/A4 och ger
+ett tydligt fel i detaljvyn/A5. Signal för stor bokning märks per konto och rad. Återanvända
+verifikationsnummer samma dag kan öppnas via SIE-radnumret. A4:s promptversion höjdes med
+`BRIDGE_VERSION`, så gamla kundutkast blir inaktuella. Fokuserade regressionstester gick rött
+före rättning och grönt efter; därefter gick hela Python-sviten, AI-evalen, ruff, strikt mypy,
+TypeScript-kontroll och Webpack-bygget grönt igen. Bryggans gräns 25 % / 10 000 kr är fortfarande
+preliminär tills kalibrering på valda avslutade kundperioder är gjord.
 
 **Självgranskning mot §9.10:** fyra delar, antals- och beloppseffekt, verifikationsidentitet och
 identifieringsgrad på absoluta belopp (Task 13); signaler (Task 13); lokal analys med urval först i

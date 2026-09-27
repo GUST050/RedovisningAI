@@ -218,11 +218,11 @@ function GroupRow({ group }: { group: BridgeGroup }) {
         </div>
       )}
       <div className="mt-0.5 flex flex-wrap gap-2 text-[11px] text-muted">
-        {group.current_vouchers.map(([key, voucherDate]) => (
-          <VoucherLink key={`current-${key}-${voucherDate}`} v={key} hint={voucherDate} />
+        {group.current_vouchers.map(([key, voucherDate, sourceLine]) => (
+          <VoucherLink key={`current-${key}-${voucherDate}-${sourceLine}`} v={key} hint={voucherDate} sourceLine={sourceLine} />
         ))}
-        {group.previous_vouchers.map(([key, voucherDate]) => (
-          <VoucherLink key={`previous-${key}-${voucherDate}`} v={key} hint={voucherDate} />
+        {group.previous_vouchers.map(([key, voucherDate, sourceLine]) => (
+          <VoucherLink key={`previous-${key}-${voucherDate}-${sourceLine}`} v={key} hint={voucherDate} sourceLine={sourceLine} />
         ))}
       </div>
     </li>

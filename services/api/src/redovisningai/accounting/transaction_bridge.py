@@ -20,7 +20,7 @@ from redovisningai.accounting.periods import Period
 from redovisningai.analytics.counterparties import CounterpartyGuess, counterparty_subject, guess_counterparty
 from redovisningai.analytics.finding_candidates import match_reversals
 from redovisningai.domain.ledger import Row, Voucher
-from redovisningai.facts.model import CALC_VERSION, Fact, FactStore, Unit, Visibility
+from redovisningai.facts.model import CALC_VERSION, Fact, FactStatus, FactStore, Unit, Visibility
 from redovisningai.rules.patterns import Pattern, classify
 
 BRIDGE_VERSION = "transaction-bridge-v1"
@@ -71,8 +71,8 @@ class GroupLine:
     current_count: int
     previous_count: int
     signals: frozenset[str]
-    current_vouchers: tuple[tuple[str, str], ...]
-    previous_vouchers: tuple[tuple[str, str], ...]
+    current_vouchers: tuple[tuple[str, str, int], ...]
+    previous_vouchers: tuple[tuple[str, str, int], ...]
     fact_id: str
 
 
@@ -176,11 +176,21 @@ def transaction_bridge(
     förändringen, delarna, antals- och beloppseffekten samt andelen oidentifierat är kundsäkra;
     gruppfakta (per motpart) är interna, eftersom motpartens namn hör till dem.
     """
+    unavailable = bridge_unavailable_reason(index, pair)
+    if unavailable:
+        raise ValueError(unavailable)
     reversal_ids = _reversal_voucher_identities(index, pair)
     rows_by_period = {
         "current": _target_rows(index, pair.current, accounts),
         "previous": _target_rows(index, pair.previous, accounts),
     }
+    voucher_change = sign * (
+        sum((row.amount for _, row in rows_by_period["current"]), ZERO)
+        - sum((row.amount for _, row in rows_by_period["previous"]), ZERO)
+    )
+    ledger_change = sign * (index.movement(accounts, pair.current) - index.movement(accounts, pair.previous))
+    if voucher_change != ledger_change:
+        raise ValueError("Transaktionsbryggan stämmer inte mot bokföringens kontorörelse")
     abs_totals_by_account = {label: _abs_by_account(rows) for label, rows in rows_by_period.items()}
 
     groups: dict[str, _GroupAcc] = {}
@@ -190,7 +200,7 @@ def transaction_bridge(
     for label, rows in rows_by_period.items():
         for ident, (voucher, voucher_rows) in _by_voucher(rows).items():
             net_by_account = _net_by_account(voucher_rows, sign)
-            signals = _voucher_signals(
+            shared_signals, large_accounts = _voucher_signals(
                 voucher,
                 ident,
                 net_by_account,
@@ -200,6 +210,7 @@ def transaction_bridge(
                 large_booking_min,
             )
             for row in voucher_rows:
+                signals = shared_signals | ({"large_booking"} if row.account in large_accounts else set())
                 guess, source = _group_guess(voucher, row, aliases)
                 amount = row.amount * sign
                 identified_abs[source] += abs(row.amount)
@@ -237,6 +248,8 @@ def transaction_bridge(
     fact_extra = _bridge_fact_extra(target)
     parts = tuple(_build_part(code, part_members[code], pair, target, store) for code in PART_CODES)
     change = sum((p.effect for p in parts), ZERO)
+    if change != ledger_change:
+        raise AssertionError("Bryggans delar stämmer inte mot kontorörelsen")
     change_fact = store.new(
         "change",
         target,
@@ -277,6 +290,17 @@ def transaction_bridge(
         signals=dict(signal_totals),
         versions={"calc": CALC_VERSION, "bridge": BRIDGE_VERSION},
     )
+
+
+def bridge_unavailable_reason(index: LedgerIndex, pair: ComparisonPair) -> str | None:
+    """Förklara varför ett periodpar saknar komplett verifikationsunderlag för en exakt brygga."""
+    if pair.status is not FactStatus.CALCULATED:
+        return "Transaktionsbryggan kräver jämförbara perioder med fullständig täckning"
+    if any(
+        index.coverage.get(month) != "vouchers" for period in (pair.current, pair.previous) for month in period.months()
+    ):
+        return "Transaktionsbryggan kräver verifikationer i båda perioderna; sammandrag eller PSALDO räcker inte"
+    return None
 
 
 def _target_rows(index: LedgerIndex, period: Period, accounts: set[int]) -> list[tuple[Voucher, Row]]:
@@ -329,18 +353,18 @@ def _voucher_signals(
     reversal_ids: set[VoucherIdentity],
     large_booking_share: Decimal,
     large_booking_min: Decimal,
-) -> set[str]:
+) -> tuple[set[str], set[int]]:
     signals: set[str] = set()
     if Pattern.ACCRUAL in classify(voucher):
         signals.add("periodization")
     if ident in reversal_ids:
         signals.add("reversal")
+    large_accounts: set[int] = set()
     for account, net in net_by_account.items():
         period_abs_total = period_abs_by_account.get(account, ZERO)
         if abs(net) >= large_booking_share * period_abs_total and abs(net) >= large_booking_min:
-            signals.add("large_booking")
-            break
-    return signals
+            large_accounts.add(account)
+    return signals, large_accounts
 
 
 def _reversal_voucher_identities(index: LedgerIndex, pair: ComparisonPair) -> set[VoucherIdentity]:
@@ -360,9 +384,12 @@ def _group_part(acc: _GroupAcc) -> str:
     return "current_only" if acc.current_vouchers else "previous_only"
 
 
-def _top_vouchers(vouchers: dict[VoucherIdentity, tuple[Voucher, Decimal]]) -> tuple[tuple[str, str], ...]:
+def _top_vouchers(vouchers: dict[VoucherIdentity, tuple[Voucher, Decimal]]) -> tuple[tuple[str, str, int], ...]:
     ranked = sorted(vouchers.values(), key=lambda pair: abs(pair[1]), reverse=True)
-    return tuple((str(voucher.key), voucher.date.isoformat()) for voucher, _ in ranked[:MAX_GROUP_VOUCHERS])
+    return tuple(
+        (str(voucher.key), voucher.date.isoformat(), voucher.source_line or 0)
+        for voucher, _ in ranked[:MAX_GROUP_VOUCHERS]
+    )
 
 
 def _bridge_fact_extra(target: str) -> str:

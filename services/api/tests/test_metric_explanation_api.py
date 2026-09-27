@@ -225,3 +225,53 @@ def test_voucher_lookup_prefers_the_exact_date_when_a_number_is_reused(monkeypat
     later = client.get(f"/api/companies/{company_id}/vouchers/A1?on=2026-09-17")
 
     assert later.status_code == 200 and later.json()["date"].startswith("2026-09-17")
+
+
+def test_voucher_lookup_uses_source_line_for_reused_same_day_number(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    ledger = _reused_number_ledger()
+    same_day = date(2026, 9, 3)
+    ledger.years[0].vouchers = [
+        Voucher("A", "1", same_day, "First", (Row(6110, Decimal("100")),), source_line=1),
+        Voucher("A", "1", same_day, "Second", (Row(6110, Decimal("200")),), source_line=10),
+    ]
+    client, company_id = _client(monkeypatch, ledger=ledger)
+
+    response = client.get(f"/api/companies/{company_id}/vouchers/A1?on=2026-09-03&source_line=10")
+
+    assert response.status_code == 200
+    assert response.json()["text"] == "Second"
+
+
+def test_transaction_bridge_rejects_summary_only_comparison(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    prior = YearData(
+        FiscalYear(date(2025, 1, 1), date(2025, 12, 31)),
+        period_balances={(date(2025, 9, 1), 6110): Decimal("800")},
+        has_vouchers=False,
+    )
+    current = YearData(
+        FiscalYear(date(2026, 1, 1), date(2026, 12, 31)),
+        [
+            Voucher(
+                "A",
+                "1",
+                date(2026, 9, 1),
+                "Faktura",
+                (
+                    Row(6110, Decimal("1000"), text="Firm"),
+                    Row(1930, Decimal("-1000")),
+                ),
+            )
+        ],
+    )
+    ledger = Ledger(
+        "Syntetbolaget AB",
+        None,
+        {n: Account(n, f"Konto {n}") for n in (1930, 6110)},
+        [prior, current],
+    )
+    client, company_id = _client(monkeypatch, ledger=ledger)
+
+    response = client.get(f"/api/companies/{company_id}/transaction-bridge?target=account:6110&period=2026-09")
+
+    assert response.status_code == 422
+    assert "verifikationer" in response.json()["detail"]

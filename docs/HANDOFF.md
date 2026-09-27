@@ -246,3 +246,32 @@ före en fast-forward-push till `claude/exciting-tesla-udl9xl`.
   underkända påståenden. Detaljer i `docs/PLAN.md`; säkerhets-evalen är grön.
 - Kvar: konsultens kalibreringsperioder, Task 17-commit, fast-forward-push och slutgranskning av
   hela grenen inklusive tidigare uppskjutna anmärkningar och en samlad rättningsomgång.
+
+### Slutgranskning och samlad rättningsomgång
+
+Granskning av `c72fa71..3c05db6`: två P1 och tre P2, alla reproducerade eller direkt belagda.
+De fem rättningarna har fokuserade regressionstester och hela Python-sviten är åter grön i en
+separat testkopia/databas (två PgBouncer-prov utelämnade). Låsta AI-evalfall, ruff, strikt mypy
+på ändrade källmoduler, TypeScript-kontroll och Webpack-bygget är också gröna.
+
+- Ruling R33 (sekretess): maskera personnummer/e-post/telefon, därefter hela motparter och sist
+  personnamn — annars blev `Erik Andersson` till `PERSON_1 Andersson` när bara Erik fanns i
+  personlistan. Kostnad om fel: en känd motpart som också är en person får M-kod i stället för
+  PERSON-kod, men kan fortfarande återställas endast i intern vy.
+- Ruling R34 (jämförelse): transaktionsbryggan kräver beräknat periodpar med
+  verifikationstäckning för varje månad och stämmer mot `LedgerIndex.movement`; PSALDO och
+  sammandrag kan inte förklaras på transaktionsnivå. A3/A4 utelämnar då bryggan, A5 och
+  detaljvyn ger ett fel. Kostnad om fel: användaren får ingen djup transaktionsförklaring för
+  ett år med endast sammandrag, men slipper en felaktig avstämd slutsats.
+- Ruling R35 (signal): stor enskild bokning kopplas till kontot vars verifikationsnetto klarar
+  tröskeln, inte till alla rader i samma verifikation. Kostnad om fel: signalbeloppet kan vara
+  lägre än verifikationens totalbelopp, vilket är avsikten när flera konton berörs.
+- Ruling R36 (källhänvisning): bryggans verifikationslänkar får även `source_line`, och
+  detaljrutten accepterar den tillsammans med datumet. Kostnad om fel: klientens bryggtyp
+  ändras från två till tre tuplefält; tidigare tvåfältssvar måste komma från samma version
+  av API:t som webben.
+- Ruling R37 (kundutkast): A4:s promptversion blir `A4-v3+BRIDGE_VERSION`. Kostnad om fel:
+  äldre sparade kundutkast blir inaktuella och måste skapas och godkännas igen.
+
+Kvar: konsultens val av avslutade kalibreringsperioder, dokumenterat tröskelbeslut och
+fast-forward-push till angiven fjärrgren. Den andra sessionens arbetskatalog är fortfarande orörd.
