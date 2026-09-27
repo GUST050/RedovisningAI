@@ -245,6 +245,26 @@ export interface TransactionBridge {
   masked: boolean;
 }
 
+// Utökat AI-underlag (§9.10): kundens godkännande per leverantör, datatyp och giltighetstid.
+export type AiDataType = "transaction_bridge";
+export interface AiApproval {
+  id: string;
+  data_types: AiDataType[];
+  provider: string;
+  valid_from: string; // ÅÅÅÅ-MM-DD
+  valid_to: string;
+  approved_by: string;
+  approved_at: string;
+  revoked_at: string | null;
+}
+export interface AiApprovals {
+  approvals: AiApproval[];
+  // Varje leverantör som kan ta emot data, även reserven i en failover-kedja.
+  providers: string[];
+  // Giltigt godkännande i dag för alla leverantörer: AI:n får transaktionsbryggan.
+  extended_active: boolean;
+}
+
 export type Overview = {
   company: { id: string; name: string; org_number: string | null };
   period: { spec: string; label: string };

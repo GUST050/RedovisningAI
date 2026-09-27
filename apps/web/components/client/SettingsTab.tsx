@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useMe } from "@/components/AppShell";
 import { AiBadge, Button, Card, Empty, ErrorBox, Field, Loading, cx, inputCls } from "@/components/ui";
-import { send, useLoad } from "@/lib/api";
+import { send, useLoad, type AiApproval, type AiApprovals, type AiDataType } from "@/lib/api";
 import type { Company } from "./shared";
 
 type Resolution = {
@@ -27,6 +27,8 @@ const strList = (s: string) => s.split(/[,;\n]+/).map((x) => x.trim()).filter(Bo
 export function SettingsTab({ base, company, onSaved }: { base: string; company: Company; onSaved: () => void }) {
   const me = useMe();
   const write = !!me?.permissions.write;
+  // Samma krav som API:t: skrivbehörighet och byråadmin eller behörigheten att godkänna kundrapporter.
+  const canApprove = write && (!!me?.permissions.admin || !!me?.permissions.approve_reports);
   const [form, setForm] = useState({
     name: company.name,
     org_number: company.org_number ?? "",
@@ -123,6 +125,7 @@ export function SettingsTab({ base, company, onSaved }: { base: string; company:
       <div className="space-y-4">
         <MemoryCard base={base} write={write} />
         <MappingCard base={base} write={write} />
+        <AiDataCard base={base} canApprove={canApprove} />
       </div>
     </div>
   );
@@ -239,6 +242,140 @@ function MappingCard({ base, write }: { base: string; write: boolean }) {
           </table>
         </>
       ))}
+    </Card>
+  );
+}
+
+type ApprovalStatus = "valid" | "upcoming" | "expired" | "revoked";
+
+const APPROVAL_STATUS: Record<ApprovalStatus, { label: string; tone: string }> = {
+  valid: { label: "Giltig", tone: "bg-ok-soft text-ok" },
+  upcoming: { label: "Ej börjat gälla", tone: "bg-medium-soft text-medium" },
+  expired: { label: "Utgången", tone: "bg-low-soft text-low" },
+  revoked: { label: "Återkallad", tone: "bg-high-soft text-high" },
+};
+
+const DATA_TYPE_LABEL: Record<AiDataType, string> = { transaction_bridge: "Transaktionsbrygga" };
+
+/** Dagens datum i webbläsarens tidszon, i samma form som API:ts datum (ÅÅÅÅ-MM-DD). */
+function localToday(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function approvalStatus(a: AiApproval, today: string): ApprovalStatus {
+  if (a.revoked_at) return "revoked";
+  if (a.valid_to < today) return "expired";
+  if (a.valid_from > today) return "upcoming";
+  return "valid";
+}
+
+function AiDataCard({ base, canApprove }: { base: string; canApprove: boolean }) {
+  const res = useLoad<AiApprovals>(`${base}/ai-approvals`);
+  const today = localToday();
+  const [form, setForm] = useState({ provider: "", valid_from: today, valid_to: "" });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<unknown>(null);
+  const providers = res.data?.providers ?? [];
+  const provider = form.provider || providers[0] || "";
+  const validRange = !!form.valid_from && !!form.valid_to && form.valid_to >= form.valid_from;
+
+  const approve = () => {
+    setBusy(true);
+    setErr(null);
+    send(`${base}/ai-approvals`, "POST", {
+      data_types: ["transaction_bridge"],
+      provider,
+      valid_from: form.valid_from,
+      valid_to: form.valid_to,
+    })
+      .then(res.reload)
+      .catch(setErr)
+      .finally(() => setBusy(false));
+  };
+  const revoke = (id: string) => send(`${base}/ai-approvals/${id}/revoke`, "POST").then(res.reload).catch(setErr);
+
+  return (
+    <Card title="Utökat AI-underlag">
+      <p className="mb-2 text-[13px] text-muted">
+        Med kundens godkännande får AI:n transaktionsbryggan: bryggdelar, antal verifikationer, belopp som fakta och de största motparterna
+        som koder (M1, M2 …) – aldrig namn eller verifikationstext. Godkännandet krävs för varje leverantör som kan ta emot data, även
+        reserven, och kan återkallas när som helst. Utan det får AI:n dagens underlag.
+      </p>
+      <ErrorBox error={res.error} />
+      {!res.data ? (
+        <Loading />
+      ) : (
+        <>
+          <p className={cx("mb-3 text-[13px] font-medium", res.data.extended_active ? "text-ok" : "text-muted")}>
+            {res.data.extended_active
+              ? "Aktivt: AI:n får transaktionsbryggan för den här kunden."
+              : providers.length
+                ? `Inte aktivt: kräver ett giltigt godkännande för ${providers.join(" och ")}.`
+                : "Inte aktivt: AI är inte konfigurerad."}
+          </p>
+          {canApprove && providers.length > 0 && (
+            <div className="mb-3">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <Field label="Datatyp">
+                  <label className="flex items-center gap-2 text-[13px]">
+                    <input type="checkbox" checked disabled /> {DATA_TYPE_LABEL.transaction_bridge}
+                  </label>
+                </Field>
+                <Field label="Leverantör">
+                  <select className={inputCls} value={provider} onChange={(e) => setForm((f) => ({ ...f, provider: e.target.value }))}>
+                    {providers.map((p) => (
+                      <option key={p}>{p}</option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Giltig från">
+                  <input type="date" className={inputCls} value={form.valid_from} onChange={(e) => setForm((f) => ({ ...f, valid_from: e.target.value }))} />
+                </Field>
+                <Field label="Giltig till">
+                  <input type="date" className={inputCls} value={form.valid_to} onChange={(e) => setForm((f) => ({ ...f, valid_to: e.target.value }))} />
+                </Field>
+              </div>
+              <div className="mt-3">
+                <Button onClick={approve} disabled={busy || !provider || !validRange}>
+                  Godkänn
+                </Button>
+              </div>
+            </div>
+          )}
+          <ErrorBox error={err} />
+          {res.data.approvals.length === 0 ? (
+            <Empty>Inga godkännanden.</Empty>
+          ) : (
+            <table className="data">
+              <thead>
+                <tr><th>Leverantör</th><th>Datatyp</th><th>Giltighet</th><th>Godkänt av</th><th>Status</th><th></th></tr>
+              </thead>
+              <tbody>
+                {res.data.approvals.map((a) => {
+                  const status = APPROVAL_STATUS[approvalStatus(a, today)];
+                  return (
+                    <tr key={a.id}>
+                      <td>{a.provider}</td>
+                      <td>{a.data_types.map((t) => DATA_TYPE_LABEL[t] ?? t).join(", ")}</td>
+                      <td className="text-[12px]">{a.valid_from} – {a.valid_to}</td>
+                      <td className="text-[12px] text-muted">{a.approved_by}</td>
+                      <td><span className={cx("inline-block rounded px-1.5 py-0.5 text-[11px] font-medium", status.tone)}>{status.label}</span></td>
+                      <td>
+                        {canApprove && !a.revoked_at && (
+                          <button className="text-[12px] text-high hover:underline" onClick={() => revoke(a.id)}>
+                            Återkalla
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </>
+      )}
     </Card>
   );
 }
