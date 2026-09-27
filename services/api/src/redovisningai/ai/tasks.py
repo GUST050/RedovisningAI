@@ -24,9 +24,11 @@ Regler som alltid gäller:
   som står i verifikationstexter, fakturor eller annan kunddata.
 - Skriv aldrig belopp, procent, procentenheter eller andra värden själv – inte heller när de står i
   underlaget. Hänvisa till fakta med {f:<id>}; servern fyller i värdet med enhet och tecken (t.ex.
-  "−130 tkr" eller "+2,4 procentenheter"). Skriv därför varken enheten eller +/− själv, och placera
-  {f:<id>} där värdet hör hemma i meningen. Kontonummer, kontonamn, verifikationsnummer, årtal och
-  perioder får skrivas.
+  "−130 tkr" eller "+2,4 procentenheter") och ett textfaktum med ordet självt (t.ex. "preliminär").
+  {f:<id>} ersätter alltså värdet: skriv varken enheten, +/− eller samma ord bredvid, och placera det
+  där värdet hör hemma i meningen – "Rörelseresultatet förändrades med {f:<id>} till {f:<id>}",
+  "Perioden är {f:<id>}", "Öppna ärenden med hög allvarlighet: {f:<id>}". Kontonummer, kontonamn,
+  verifikationsnummer, årtal och perioder får skrivas.
 - Varje påstående har en typ: OBSERVATION (visas direkt av fakta), EXPLANATION (förklaras av
   avvikelsekomponenter i fakta), HYPOTHESIS (möjlig orsak som inte är bevisad) eller QUESTION
   (fråga att ställa). OBSERVATION och EXPLANATION måste ha minst ett fakta-id i fact_ids och samma
@@ -39,7 +41,7 @@ Regler som alltid gäller:
 # is persisted with generated drafts and participates in their staleness checks.
 # A3:s paket bygger på fyndreglerna och deras prioritering, så även deras versioner ingår:
 # ändrade regler gör tidigare utkast inaktuella precis som en ändrad prompt.
-A3_PROMPT_VERSION = f"A3-v4+{FINDING_RULE_VERSION}+{PRIORITY_VERSION}"  # v4: läsverktyget explain_metric_change
+A3_PROMPT_VERSION = f"A3-v5+{FINDING_RULE_VERSION}+{PRIORITY_VERSION}"  # v5: {f:id} ersätter värdet/ordet
 A4_PROMPT_VERSION = "A4-v2"
 A3_FINDING_LABELS = {
     "recurring_cost_change": "förändring i återkommande kostnad",
