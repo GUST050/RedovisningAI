@@ -1,5 +1,6 @@
 import uuid
 from datetime import date
+from decimal import Decimal
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -9,10 +10,11 @@ from redovisningai.api import routes_company
 from redovisningai.api.deps import Principal
 from redovisningai.api.routes_other import _analysis_metadata_current
 from redovisningai.devdata.generator import DEMO_PROFILES, generate
+from redovisningai.domain.ledger import Account, FiscalYear, Ledger, Row, Voucher, YearData
 from redovisningai.review.analysis import PAYROLL, CompanyAnalysis, CompanyContext
 
 
-def _client(monkeypatch, *, can_payroll: bool = False) -> tuple[TestClient, str]:  # type: ignore[no-untyped-def]
+def _client(monkeypatch, *, can_payroll: bool = False, ledger: Ledger | None = None) -> tuple[TestClient, str]:  # type: ignore[no-untyped-def]
     company_id = uuid.uuid4()
     org_id = uuid.uuid4()
     principal = Principal(
@@ -27,7 +29,7 @@ def _client(monkeypatch, *, can_payroll: bool = False) -> tuple[TestClient, str]
         False,
         (),
     )
-    ledger = generate(DEMO_PROFILES[0], date(2026, 9, 30)).ledger
+    ledger = ledger if ledger is not None else generate(DEMO_PROFILES[0], date(2026, 9, 30)).ledger
     analysis = CompanyAnalysis(ledger, CompanyContext(str(company_id), str(org_id), "Demo AB"))
     monkeypatch.setattr(routes_company, "load_analysis", lambda _principal, _company_id: analysis)
     app = FastAPI()
@@ -118,3 +120,34 @@ def test_explicit_comparison_flows_through_overview_and_analysis_fingerprint(mon
     }
     assert _analysis_metadata_current(analysis, metadata)
     assert not _analysis_metadata_current(analysis, {**metadata, "prompt_version": "A3-old"})
+
+
+def test_transaction_bridge_api_reconciles_and_hides_payroll_groups(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    client, company_id = _client(monkeypatch)
+    url = f"/api/companies/{company_id}/transaction-bridge"
+
+    costs = client.get(url, params={"target": "account:6110", "period": "2026-09", "mode": "yoy"})
+    payroll = client.get(url, params={"target": "account:7210", "period": "2026-09", "mode": "yoy"})
+
+    assert costs.status_code == 200 and payroll.status_code == 200
+    body = costs.json()
+    assert sum(Decimal(p["effect"]) for p in body["parts"]) == Decimal(body["change"])
+    assert any(g["name"] == "Staples" for g in body["groups"])
+    assert payroll.json()["masked"] is True and payroll.json()["groups"] == []
+    assert client.get(url, params={"target": "account:abc", "period": "2026-09"}).status_code == 422
+
+
+def _reused_number_ledger() -> Ledger:
+    rows = (Row(6110, Decimal("400")), Row(1930, Decimal("-400")))
+    vouchers = [Voucher("A", "1", date(2026, 9, day), f"Städning {day}", rows) for day in (3, 17)]
+    accounts = {n: Account(n, f"Konto {n}") for n in (1930, 6110)}
+    year = YearData(FiscalYear(date(2026, 1, 1), date(2026, 12, 31)), vouchers)
+    return Ledger("Syntetbolaget AB", None, accounts, [year])
+
+
+def test_voucher_lookup_prefers_the_exact_date_when_a_number_is_reused(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    client, company_id = _client(monkeypatch, ledger=_reused_number_ledger())
+
+    later = client.get(f"/api/companies/{company_id}/vouchers/A1?on=2026-09-17")
+
+    assert later.status_code == 200 and later.json()["date"].startswith("2026-09-17")

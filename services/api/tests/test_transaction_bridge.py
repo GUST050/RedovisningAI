@@ -1,0 +1,116 @@
+from datetime import date
+from decimal import Decimal
+
+from redovisningai.accounting.balances import LedgerIndex
+from redovisningai.accounting.comparisons import ComparisonPair
+from redovisningai.accounting.periods import month
+from redovisningai.accounting.transaction_bridge import TransactionBridge, transaction_bridge
+from redovisningai.domain.ledger import Account, FiscalYear, Ledger, Row, Voucher, YearData
+from redovisningai.facts.model import FactStatus, FactStore
+
+PAIR = ComparisonPair(month(2026, 9), month(2025, 9), FactStatus.CALCULATED)
+
+
+def _v(number: str, day: date, amount: str, text: str | None, voucher_text: str = "Faktura") -> Voucher:
+    value = Decimal(amount)
+    return Voucher("A", number, day, voucher_text, (Row(6110, value, text=text), Row(2440, -value)))
+
+
+def _index(vouchers: list[Voucher]) -> LedgerIndex:
+    accounts = {n: Account(n, f"Konto {n}") for n in (1930, 2440, 2990, 6110)}
+    years = [
+        YearData(FiscalYear(date(y, 1, 1), date(y, 12, 31)), [v for v in vouchers if v.date.year == y])
+        for y in (2025, 2026)
+    ]
+    return LedgerIndex.build(Ledger("Syntetbolaget AB", None, accounts, years))
+
+
+def _bridge(vouchers: list[Voucher]) -> TransactionBridge:
+    return transaction_bridge(
+        _index(vouchers), {6110}, PAIR, target="account:6110", aliases={}, sign=1, store=FactStore()
+    )
+
+
+def test_parts_sum_exactly_with_credit_notes_and_unknown_counterparties() -> None:
+    # Jämförelse: A 2 × 1 000 och C 700 = 2 700. Aktuell: A 3 × 1 100 och en kreditfaktura på −200,
+    # B 500 och en rad utan motpart på 300 = 3 900. Förändring 1 200 = A +1 100, B +500, C −700, okänd +300.
+    bridge = _bridge(
+        [
+            _v("1", date(2025, 9, 5), "1000", "Leverantör A"),
+            _v("2", date(2025, 9, 20), "1000", "Leverantör A"),
+            _v("3", date(2025, 9, 12), "700", "Leverantör C"),
+            _v("1", date(2026, 9, 4), "1100", "Leverantör A"),
+            _v("2", date(2026, 9, 11), "1100", "Leverantör A"),
+            _v("3", date(2026, 9, 18), "1100", "Leverantör A"),
+            _v("4", date(2026, 9, 25), "-200", "Leverantör A", "Kreditfaktura"),
+            _v("5", date(2026, 9, 14), "500", "Leverantör B"),
+            _v("6", date(2026, 9, 28), "300", None, "Diverse"),
+        ]
+    )
+    parts = {p.code: p for p in bridge.parts}
+
+    assert bridge.change == Decimal("1200") == sum(p.effect for p in bridge.parts)
+    assert [parts[c].effect for c in ("both", "current_only", "previous_only", "unknown")] == [
+        Decimal("1100"),
+        Decimal("500"),
+        Decimal("-700"),
+        Decimal("300"),
+    ]
+    # A: 2 → 4 verifikationer, snitt 1 000 → 775. X = 4 × 2 000 / 2 = 4 000.
+    assert (parts["both"].previous_count, parts["both"].current_count) == (2, 4)
+    assert (parts["both"].count_effect, parts["both"].amount_effect) == (Decimal("2000"), Decimal("-900"))
+    # Absoluta belopp i båda perioderna: 2 700 + 4 300 = 7 000, varav 300 oidentifierat.
+    assert bridge.identified_share_abs["unknown"] == Decimal("300") / Decimal("7000")
+    assert bridge.signals == {}
+
+
+def test_an_empty_comparison_period_and_reused_voucher_numbers_still_reconcile() -> None:
+    # Jämförelseperioden saknar verifikationer; källsystemet återanvänder nummer A1 på två datum.
+    bridge = _bridge(
+        [
+            _v("1", date(2026, 9, 3), "400", "Städbolaget"),
+            _v("1", date(2026, 9, 17), "400", "Städbolaget"),
+        ]
+    )
+    parts = {p.code: p for p in bridge.parts}
+
+    assert bridge.change == Decimal("800") == sum(p.effect for p in bridge.parts)
+    assert (parts["current_only"].current_count, parts["current_only"].previous_count) == (2, 0)
+    assert parts["both"].effect == parts["previous_only"].effect == parts["unknown"].effect == Decimal("0")
+
+
+def test_reversals_and_large_bookings_are_signals_not_extra_amounts() -> None:
+    # En periodisering 31 augusti återförs 1 september; A har en stor bokning på 30 000 i september.
+    accrual = Voucher(
+        "A",
+        "9",
+        date(2026, 8, 31),
+        "Periodisering",
+        (Row(6110, Decimal("5000"), text="Konsult"), Row(2990, Decimal("-5000"))),
+    )
+    reversal = Voucher(
+        "A",
+        "10",
+        date(2026, 9, 1),
+        "Återföring",
+        (Row(2990, Decimal("5000")), Row(6110, Decimal("-5000"), text="Konsult")),
+    )
+    bridge = _bridge(
+        [
+            _v("1", date(2025, 9, 5), "1000", "Leverantör A"),
+            accrual,
+            reversal,
+            _v("11", date(2026, 9, 5), "1000", "Leverantör A"),
+            _v("12", date(2026, 9, 15), "30000", "Leverantör A"),
+        ]
+    )
+    groups = {g.name: g for g in bridge.groups}
+
+    assert bridge.change == Decimal("25000") == sum(p.effect for p in bridge.parts)
+    assert bridge.signals == {
+        "large_booking": Decimal("30000"),
+        "reversal": Decimal("-5000"),
+        "periodization": Decimal("-5000"),
+    }
+    assert "large_booking" in groups["Leverantör A"].signals
+    assert {"reversal", "periodization"} <= groups["Konsult"].signals

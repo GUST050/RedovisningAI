@@ -270,6 +270,22 @@ class CompanyAnalysis:
         }
 
     # ------------------------------------------------------------------ förklara
+    def target_accounts(self, target: str) -> tuple[set[int], int]:
+        """Konton och tecken för `line:<kod>`, `category:<kod>` eller `account:<nr>`."""
+        kind, _, code = target.partition(":")
+        if kind == "line":
+            accs = line_accounts(code, self.index, self.ctx.statement_mapping)
+            sign = -1 if code in ("net_sales", "other_operating_income", "interest_income") else 1
+        elif kind == "category":
+            accs = self.ctx.category_mapping.accounts_in(code, self.index.accounts_used)
+            sign = 1
+        elif kind == "account":
+            accs = {int(code)}
+            sign = -1 if 3000 <= int(code) <= 3999 else 1
+        else:
+            raise ValueError(f"Okänt förklaringsmål: {target}")
+        return accs, sign
+
     def explain(
         self, target: str, period: Period, compare: Period | None = None, store: FactStore | None = None
     ) -> dict[str, Any]:
@@ -284,18 +300,7 @@ class CompanyAnalysis:
         if target == "costs":
             b = category_bridge(self.index, period, compare, mapping=self.ctx.category_mapping, store=store)
             return {"kind": "bridge", "bridge": b.to_dict()}
-        kind, _, code = target.partition(":")
-        if kind == "line":
-            accs = line_accounts(code, self.index, self.ctx.statement_mapping)
-            sign = -1 if code in ("net_sales", "other_operating_income", "interest_income") else 1
-        elif kind == "category":
-            accs = self.ctx.category_mapping.accounts_in(code, self.index.accounts_used)
-            sign = 1
-        elif kind == "account":
-            accs = {int(code)}
-            sign = -1 if 3000 <= int(code) <= 3999 else 1
-        else:
-            raise ValueError(f"Okänt förklaringsmål: {target}")
+        accs, sign = self.target_accounts(target)
         d = drilldown(self.index, accs, period, compare, store=store, sign=sign)
         return {
             "kind": "drilldown",

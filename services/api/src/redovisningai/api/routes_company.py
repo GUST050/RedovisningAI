@@ -22,6 +22,7 @@ from redovisningai.accounting.metric_evidence import evidence_for_component
 from redovisningai.accounting.metric_explanations import explain_metric
 from redovisningai.accounting.metrics import REGISTRY
 from redovisningai.accounting.periods import same_period_previous_year
+from redovisningai.accounting.transaction_bridge import transaction_bridge
 from redovisningai.ai.egress import EgressGuard
 from redovisningai.analytics.budget import budget_vs_actual
 from redovisningai.analytics.finding_candidates import FindingCandidate, collect_candidates
@@ -486,6 +487,33 @@ def explain(
     return _mask_payroll(res, principal)  # type: ignore[no-any-return]
 
 
+@router.get("/transaction-bridge")
+def transaction_bridge_route(
+    company_id: uuid.UUID,
+    target: str,
+    period: str,
+    mode: Literal["yoy", "previous"] = "yoy",
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """Transaktionsbryggan: förklarar en förändring efter motpart, lokalt och utan AI."""
+    a = load_analysis(principal, company_id)
+    try:
+        current = _period(a, period)
+        pair = comparison_pair(current, mode, a.ledger, a.index)
+        accounts, sign = a.target_accounts(target)
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(422, f"Okänt mål eller period: {target}") from exc
+    bridge = transaction_bridge(
+        a.index, accounts, pair, target=target, aliases=a.ctx.aliases, sign=sign, store=FactStore()
+    )
+    payload = bridge.to_dict()
+    masked = any(account in PAYROLL for account in accounts) and not principal.can_payroll
+    if masked:
+        payload["groups"] = []
+    payload["masked"] = masked
+    return payload
+
+
 @router.get("/maturity")
 def maturity(
     company_id: uuid.UUID, period: str | None = None, principal: Principal = Depends(get_principal)
@@ -597,7 +625,8 @@ def voucher(
     principal: Principal = Depends(get_principal),
 ) -> dict[str, Any]:
     """Verifikationsnummer börjar om varje räkenskapsår. `on` (datum) eller `period` avgör året;
-    utan dem används det senaste året där numret finns."""
+    utan dem används det senaste året där numret finns. Återanvänds numret inom året väljs den
+    verifikation som har exakt `on`-datumet först."""
     a = load_analysis(principal, company_id)
     anchor = on
     if anchor is None and period:
@@ -607,9 +636,14 @@ def voucher(
         fy = a.ledger.year_for(anchor)
         years = ([fy] if fy else []) + [y for y in years if y is not fy]
     for y in years:
-        for v in y.vouchers:
-            if str(v.key) == key:
-                return voucher_view(v, a.ledger, include_payroll_rows=principal.can_payroll)
+        matches = [v for v in y.vouchers if str(v.key) == key]
+        if not matches:
+            continue
+        if on is not None:
+            exact = next((v for v in matches if v.date == on), None)
+            if exact is not None:
+                return voucher_view(exact, a.ledger, include_payroll_rows=principal.can_payroll)
+        return voucher_view(matches[0], a.ledger, include_payroll_rows=principal.can_payroll)
     raise HTTPException(404, "Verifikationen finns inte")
 
 

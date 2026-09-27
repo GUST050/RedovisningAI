@@ -12,7 +12,7 @@ from redovisningai.accounting.balances import LedgerIndex
 from redovisningai.accounting.comparisons import ComparisonPair
 from redovisningai.accounting.metric_evidence import evidence_for_component
 from redovisningai.accounting.metric_explanations import MetricComponent, MetricExplanation
-from redovisningai.accounting.periods import add_months, month_start, months_between
+from redovisningai.accounting.periods import Period, add_months, month_start, months_between
 from redovisningai.accounting.periods import month as month_period
 from redovisningai.analytics.counterparties import counterparty_for_row
 from redovisningai.analytics.spend import collect_spend, detect_level_shift, spend_report
@@ -255,19 +255,16 @@ def _margin_pressure_candidates(
     ]
 
 
-def _reversal_candidates(
-    index: LedgerIndex | None, pair: ComparisonPair, *, mapping_version: str
-) -> list[FindingCandidate]:
+def match_reversals(index: LedgerIndex, period: Period) -> list[tuple[Voucher, Voucher]]:
     """Verifikationer i perioden som exakt motbokar en tidigare verifikation (återföring eller rättelse).
 
     Avtrycket jämförs på effektiva rader (#BTRANS räknas inte, #RTRANS räknas), så en rättad
-    verifikation matchas mot sina gällande rader. Återföringen flyttar resultat mellan perioder och
-    kan förklara en del av ett nyckeltals förändring. Motbokning inom perioden har ingen
-    resultateffekt och hanteras av regeln RAPID_REVERSAL.
+    verifikation matchas mot sina gällande rader. Returnerar (återföring, original)-par, det senaste
+    originalet före återföringen, vardera högst en gång.
     """
-    if index is None or not index.has_data(pair.current):
+    if not index.has_data(period):
         return []
-    period_start = month_start(pair.current.start)
+    period_start = month_start(period.start)
     lookback = months_between(add_months(period_start, -REVERSAL_LOOKBACK_MONTHS), add_months(period_start, -1))
     earlier: dict[tuple[tuple[int, Decimal], ...], list[Voucher]] = {}
     for first_day in lookback:
@@ -275,8 +272,8 @@ def _reversal_candidates(
             earlier.setdefault(voucher.net_by_account(), []).append(voucher)
 
     matched: set[tuple[str, date]] = set()  # verifikationsnummer börjar om varje räkenskapsår
-    out: list[FindingCandidate] = []
-    for voucher in sorted(index.vouchers_in(pair.current), key=lambda v: (v.date, str(v.key))):
+    out: list[tuple[Voucher, Voucher]] = []
+    for voucher in sorted(index.vouchers_in(period), key=lambda v: (v.date, str(v.key))):
         signature = voucher.net_by_account()
         result_effect = -sum((amount for account, amount in signature if account in RESULT_ACCOUNTS), ZERO)
         if abs(result_effect) < REVERSAL_MIN_SEK:
@@ -287,6 +284,25 @@ def _reversal_candidates(
             continue
         original = max(originals, key=lambda w: (w.date, str(w.key)))  # närmast före återföringen
         matched.add((str(original.key), original.date))
+        out.append((voucher, original))
+    return out
+
+
+def _reversal_candidates(
+    index: LedgerIndex | None, pair: ComparisonPair, *, mapping_version: str
+) -> list[FindingCandidate]:
+    """Kandidater av verifikationer som exakt motbokar en tidigare verifikation.
+
+    Återföringen flyttar resultat mellan perioder och kan förklara en del av ett nyckeltals
+    förändring. Motbokning inom perioden har ingen resultateffekt och hanteras av regeln
+    RAPID_REVERSAL.
+    """
+    if index is None:
+        return []
+    out: list[FindingCandidate] = []
+    for voucher, original in match_reversals(index, pair.current):
+        signature = voucher.net_by_account()
+        result_effect = -sum((amount for account, amount in signature if account in RESULT_ACCOUNTS), ZERO)
         out.append(
             FindingCandidate(
                 code="correction_reversal",
