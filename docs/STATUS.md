@@ -72,12 +72,14 @@ BankID, prognoser. Inloggning via OIDC finns (fungerar med Entra ID). 👤 ISO 2
 
 ## Testning (§12)
 
-- 122 automatiska tester: parser (inkl. CP437, #RTRANS/#BTRANS, brutna räkenskapsår), golden
-  tests för RR/BR, regler med datumgränsfall, fyndlivscykel, AI-verifierare och
+- 250 automatiska tester (2026-09-27): parser (inkl. CP437, #RTRANS/#BTRANS, brutna räkenskapsår), golden
+  tests för RR/BR, nyckeltalsbryggor och fyndkandidater, regler med datumgränsfall, fyndlivscykel, AI-verifierare och
   pseudonymisering, RLS (byrå/kund/lön/PTL/läsare/publik länk), PgBouncer-läckagetest, API och
   kopplingar.
 - AI-evals: `redovisningai eval` (sifferfel, avvisade påståenden, läckage till kundtext,
-  mappningsträffsäkerhet).
+  mappningsträffsäkerhet) plus tio låsta syntetiska fall för fyndmotorn och AI-gränsen (säsong,
+  engångskostnad, nivåskifte, återföring, dubblett, osäker motpart, saknad månad, #PSALDO,
+  lön/PTL, promptinjektion) med låst facit och noll-krav på fel och läckage (plan Task 10).
 - Webben: end-to-end i webbläsare (portfölj, alla flikar, kundfråga med svar via publik länk,
   beslut, godkännande med motivering, rapportnedladdning, SIE-uppladdning, läsarbehörighet).
 - 👤 SIE-korpus med riktiga filer från fler exportörer (Spiris, BL, Hogia, Bokio) behövs från
@@ -90,6 +92,9 @@ BankID, prognoser. Inloggning via OIDC finns (fungerar med Entra ID). 👤 ISO 2
    underbiträdeslista (§11.1–2).
 3. 👤 Regelkatalogen granskas av auktoriserad redovisningskonsult (§1.4).
 4. 👤 AI-leverantör: avtal och nycklar i EU-region, samt evals på pilotdata.
-5. 👤 Driftmiljö (t.ex. Azure Sweden Central): hanterad PostgreSQL, objektlagring, Key Vault,
+5. 👤 Blindad pilot (plan Task 10): konsulter bedömer de fem översta fynden mot nuvarande
+   arbetssätt på låsta, avslutade kundmånader – precision bland topp fem, falsklarm per
+   kundmånad, tid till beslut och AI-kostnad. Syntetiska fall räcker inte som kvalitetsbevis.
+6. 👤 Driftmiljö (t.ex. Azure Sweden Central): hanterad PostgreSQL, objektlagring, Key Vault,
    Entra ID-app, övervakning och säkerhetskopiering.
-6. 👤 Penetrationstest före första betalande kund.
+7. 👤 Penetrationstest före första betalande kund.
