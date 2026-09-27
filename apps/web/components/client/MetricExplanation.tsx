@@ -5,6 +5,7 @@ import { Card, ErrorBox, Loading, cx } from "@/components/ui";
 import { type AnalysisFinding, type AnalysisFindings, type MetricComparison, type MetricComparisons, type MetricEvidence, type MetricEvidenceRow, type MetricExplanation, useLoad } from "@/lib/api";
 import { pct, sek } from "@/lib/format";
 import { VoucherLink, useClient } from "./shared";
+import { TransactionBridgeToggle } from "./TransactionBridge";
 
 type Mode = "yoy" | "previous";
 
@@ -105,7 +106,9 @@ function MetricSummary({
             </ul>
           )}
           <ErrorBox error={findings.error} />
-          {findings.data && <FindingCandidates data={findings.data} metrics={summary.data.metrics} onSelectMetric={onSelect} />}
+          {findings.data && (
+            <FindingCandidates data={findings.data} metrics={summary.data.metrics} onSelectMetric={onSelect} base={base} period={spec} mode={mode} />
+          )}
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
             {Object.values(summary.data.metrics).map((metric) => (
               <MetricTile
@@ -125,7 +128,21 @@ function MetricSummary({
   );
 }
 
-function FindingCandidates({ data, metrics, onSelectMetric }: { data: AnalysisFindings; metrics: Record<string, MetricComparison>; onSelectMetric: (code: string) => void }) {
+function FindingCandidates({
+  data,
+  metrics,
+  onSelectMetric,
+  base,
+  period,
+  mode,
+}: {
+  data: AnalysisFindings;
+  metrics: Record<string, MetricComparison>;
+  onSelectMetric: (code: string) => void;
+  base: string;
+  period: string;
+  mode: Mode;
+}) {
   return (
     <section aria-label="Prioriterade analyskandidater" className="rounded-md border border-line bg-canvas p-3">
       <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
@@ -135,14 +152,14 @@ function FindingCandidates({ data, metrics, onSelectMetric }: { data: AnalysisFi
       {data.warnings.map((warning, i) => <p key={`${i}-${warning}`} className="mb-2 text-[12px] text-medium">{warning}</p>)}
       {data.top.length === 0 ? <p className="text-[12px] text-muted">Inga kandidater med tillräckligt underlag för perioden.</p> : (
         <ul className="space-y-1">
-          {data.top.map((item) => <FindingRow key={item.group_key} item={item} metrics={metrics} onSelectMetric={onSelectMetric} />)}
+          {data.top.map((item) => <FindingRow key={item.group_key} item={item} metrics={metrics} onSelectMetric={onSelectMetric} base={base} period={period} mode={mode} />)}
         </ul>
       )}
       {data.others.length > 0 && (
         <details className="mt-2 text-[12px]">
           <summary className="focus-ring cursor-pointer text-brand">Visa {data.others.length} övriga kandidater och nedprioriteringsskäl</summary>
           <ul className="mt-2 space-y-1">
-            {data.others.map((item) => <FindingRow key={item.group_key} item={item} metrics={metrics} onSelectMetric={onSelectMetric} />)}
+            {data.others.map((item) => <FindingRow key={item.group_key} item={item} metrics={metrics} onSelectMetric={onSelectMetric} base={base} period={period} mode={mode} />)}
           </ul>
         </details>
       )}
@@ -150,8 +167,26 @@ function FindingCandidates({ data, metrics, onSelectMetric }: { data: AnalysisFi
   );
 }
 
-function FindingRow({ item, metrics, onSelectMetric }: { item: AnalysisFinding; metrics: Record<string, MetricComparison>; onSelectMetric: (code: string) => void }) {
+function FindingRow({
+  item,
+  metrics,
+  onSelectMetric,
+  base,
+  period,
+  mode,
+}: {
+  item: AnalysisFinding;
+  metrics: Record<string, MetricComparison>;
+  onSelectMetric: (code: string) => void;
+  base: string;
+  period: string;
+  mode: Mode;
+}) {
   const [expanded, setExpanded] = useState(false);
+  const firstAccount = item.sources
+    .flatMap((source) => source.accounts.split(","))
+    .map((account) => account.trim())
+    .find((account) => account !== "");
   return (
     <li className="rounded bg-white px-3 py-2">
       <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
@@ -194,6 +229,7 @@ function FindingRow({ item, metrics, onSelectMetric }: { item: AnalysisFinding; 
               Visa nyckeltal: {metrics[code].label}
             </button>
           ))}
+          {firstAccount && <TransactionBridgeToggle base={base} target={`account:${firstAccount}`} period={period} mode={mode} />}
         </div>
       )}
     </li>
@@ -241,6 +277,9 @@ function MetricDetail({ code, period, mode, summary, base }: { code: string; per
               </div>
               {component.note && <p className="mt-1 text-[12px] text-muted">{component.note}</p>}
               <Evidence evidence={component.evidence} />
+              {component.source_level === "account" && (
+                <TransactionBridgeToggle base={base} target={`line:${component.code}`} period={period} mode={mode} />
+              )}
             </div>
           ))}
         </div>

@@ -199,6 +199,46 @@ export type AnalysisFindings = {
   count: number;
 };
 
+// Transaktionsbryggan (§9.10): förklarar en förändring efter motpart, lokalt och utan AI.
+export type BridgePartCode = "both" | "current_only" | "previous_only" | "unknown";
+export type BridgeSignal = "periodization" | "reversal" | "large_booking";
+export interface BridgePart {
+  code: BridgePartCode;
+  current: string;
+  previous: string;
+  effect: string;
+  current_count: number;
+  previous_count: number;
+  count_effect: string | null;
+  amount_effect: string | null;
+  fact_id: string;
+}
+export interface BridgeGroup {
+  key: string;
+  name: string | null;
+  source: "alias" | "row_text" | "voucher_text" | "unknown";
+  part: BridgePartCode;
+  current: string;
+  previous: string;
+  current_count: number;
+  previous_count: number;
+  signals: BridgeSignal[];
+  current_vouchers: [string, string][];
+  previous_vouchers: [string, string][];
+  fact_id: string;
+}
+export interface TransactionBridge {
+  target: string;
+  change: string;
+  change_fact_id: string;
+  parts: BridgePart[];
+  groups: BridgeGroup[];
+  identified_share_abs: Record<"alias" | "row_text" | "voucher_text" | "unknown", string>;
+  signals: Partial<Record<BridgeSignal, string>>;
+  versions: Record<string, string>;
+  masked: boolean;
+}
+
 export type Overview = {
   company: { id: string; name: string; org_number: string | null };
   period: { spec: string; label: string };
