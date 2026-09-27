@@ -163,3 +163,113 @@ def test_maturity_invoice_method_when_customers_pay_same_month() -> None:
     raw = (Path(__file__).parent / "fixtures" / "fortnox_like.se").read_bytes()
     idx = LedgerIndex.build(ledger_from_documents([(parse_sie(raw), "fortnox_like.se")]))
     assert assess(idx, month(2026, 8)).accounting_method.value == "invoice"
+
+
+# --------------------------------------------------------------- dubblettregeln: grupper, inte par
+
+
+def _dup_ctx(vouchers, period):  # type: ignore[no-untyped-def]
+    from redovisningai.domain.ledger import Account, FiscalYear, Ledger, YearData
+
+    names = {1930: "Bank", 2440: "Leverantörsskulder", 2641: "Ingående moms", 4010: "Varuinköp", 5410: "Förbrukning"}
+    ledger = Ledger(
+        "Syntetbolaget AB",
+        None,
+        {a: Account(a, n) for a, n in names.items()},
+        [YearData(FiscalYear(date(2023, 1, 1), date(2023, 12, 31)), vouchers)],
+    )
+    idx = LedgerIndex.build(ledger)
+    return RuleContext(
+        ledger=ledger, index=idx, period=period, settings=CompanySettings(), maturity=assess(idx, period)
+    )
+
+
+def _invoice(key: str, day: date, amount: str, text: str):  # type: ignore[no-untyped-def]
+    from decimal import Decimal
+
+    from redovisningai.domain.ledger import Row, Voucher
+
+    net, vat = Decimal(amount), Decimal(amount) / 4
+    return Voucher("A", key, day, text, (Row(4010, net), Row(2641, vat), Row(2440, -(net + vat))))
+
+
+def _duplicates(vouchers, period):  # type: ignore[no-untyped-def]
+    return run_rules(_dup_ctx(vouchers, period), codes={"DUPLICATE_CANDIDATE"})
+
+
+def test_a_daily_series_of_identical_invoices_is_not_reported_as_duplicates() -> None:
+    """Två identiska fakturor per dag i en månad är en återkommande serie. Tidigare gav varje par
+    inom 14 dagar ett eget fynd – det växer kvadratiskt och fick en riktig import att ta slut på minne."""
+    series = [
+        _invoice(f"{day:02d}{k}", date(2023, 1, day), "1000", "Leverantörsfaktura")
+        for day in range(1, 31)
+        for k in range(2)
+    ]
+
+    assert _duplicates(series, month(2023, 1)) == []
+
+
+def test_an_invoice_booked_twice_gives_one_finding_with_both_vouchers() -> None:
+    twice = [
+        _invoice("300", date(2023, 3, 10), "5000", "Faktura Byggvaror 88213"),
+        _invoice("301", date(2023, 3, 14), "5000", "Faktura Byggvaror 88213"),
+        _invoice("302", date(2023, 5, 10), "5000", "Faktura Byggvaror 88999"),  # nästa månads faktura
+    ]
+
+    (finding,) = _duplicates(twice, month(2023, 3))
+
+    assert finding.vouchers == ["A300", "A301"]
+    assert finding.severity.value == "HIGH"  # identisk text
+    assert finding.key == ("A300", "A301")  # samma identitet som tidigare parfynd
+
+
+def test_three_bookings_close_in_time_give_one_finding_not_three_pairs() -> None:
+    thrice = [_invoice(str(k), date(2023, 6, 5 + k), "2500", "Faktura Städ AB 4411") for k in range(3)]
+
+    (finding,) = _duplicates(thrice, month(2023, 6))
+
+    assert finding.vouchers == ["A0", "A1", "A2"]
+    assert "3 verifikationer" in finding.title
+
+
+def test_duplicate_findings_stay_bounded_however_many_identical_postings_there_are() -> None:
+    crowded = [
+        _invoice(f"{day:02d}{k:02d}", date(2023, 2, day), "1500", "Kortköp") for day in range(1, 29) for k in range(40)
+    ]
+
+    assert len(_duplicates(crowded, month(2023, 2))) <= len(crowded) // 2
+
+
+def test_voucher_gaps_are_found_without_materialising_the_number_range() -> None:
+    """En verklig export hade en serie med nummer 300 009 938–600 001 026. Regeln byggde en mängd av
+    varje tal i spannet (300 miljoner) och importen tog slut på minne. Luckor ska räknas mellan
+    intilliggande nummer, så minnet beror på antalet verifikationer och inte på spannet."""
+    import tracemalloc
+    from decimal import Decimal
+
+    from redovisningai.domain.ledger import Account, FiscalYear, Ledger, Row, Voucher, YearData
+
+    rows = (Row(6110, Decimal("100")), Row(1930, Decimal("-100")))
+    vouchers = [
+        Voucher("S", "1", date(2023, 1, 5), "Första", rows),
+        Voucher("S", "2", date(2023, 1, 6), "Andra", rows),
+        Voucher("S", "5000000", date(2023, 1, 20), "Hopp i numreringen", rows),
+    ]
+    ledger = Ledger(
+        "Syntetbolaget AB",
+        None,
+        {6110: Account(6110, "Kontorsmateriel"), 1930: Account(1930, "Bank")},
+        [YearData(FiscalYear(date(2023, 1, 1), date(2023, 12, 31)), vouchers)],
+    )
+    idx = LedgerIndex.build(ledger)
+    period = month(2023, 1)
+    ctx = RuleContext(ledger, idx, period, CompanySettings(), assess(idx, period))
+
+    tracemalloc.start()
+    gaps = run_rules(ctx, codes={"VOUCHER_NUMBER_GAP"})
+    _, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+
+    assert [g.details["count"] for g in gaps] == [4_999_997]  # 3–4 999 999 saknas, ett fynd
+    assert gaps[0].period == "2023-01"
+    assert peak < 20 * 1024 * 1024  # tidigare hundratals MB för detta spann

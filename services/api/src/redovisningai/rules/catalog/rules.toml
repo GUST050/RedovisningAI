@@ -303,10 +303,10 @@ reviewed_at = "2026-09-24"
 
 [[rule]]
 code = "DUPLICATE_CANDIDATE"
-version = "1"
+version = "2"
 category = "pattern"
 title = "Möjlig dubbelbokning"
-description = "Två verifikationer med samma belopp, konto och liknande text nära i tid."
+description = "Två eller tre verifikationer med samma belopp, konto och liknande text nära i tid. Längre kedjor är återkommande serier, inte dubbletter."
 legal_basis = "God redovisningssed"
 valid_from = "2000-01-01"
 severity = "HIGH"
@@ -317,6 +317,7 @@ reviewed_at = "2026-09-24"
 min_amount = "1000.00"
 max_days = 14
 min_text_similarity = "0.8"
+max_group_size = 3  # fler verifikationer i samma kedja räknas som en återkommande serie
 
 [[rule]]
 code = "LARGE_MANUAL_POSTING"

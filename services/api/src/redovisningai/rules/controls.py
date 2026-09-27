@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from collections.abc import Iterable
 from datetime import date, timedelta
 from decimal import Decimal
 from difflib import SequenceMatcher
+from itertools import pairwise
 from statistics import median
 
 from redovisningai.accounting.balances import AccountSet
@@ -172,18 +174,14 @@ def voucher_number_gap(ctx: RuleContext, rd: RuleDefinition) -> list[FindingCand
                     )
                 )
             seen.add(n)
-        missing = sorted(set(range(nums[0], nums[-1] + 1)) - seen)
-        # Slå ihop på varandra följande saknade nummer till intervall – ett fynd per lucka.
-        ranges: list[tuple[int, int]] = []
-        for n in missing:
-            if ranges and n == ranges[-1][1] + 1:
-                ranges[-1] = (ranges[-1][0], n)
-            else:
-                ranges.append((n, n))
         by_no = {n: v for n, v in items}
-        for lo, hi in ranges:
-            nxt = next((by_no[k] for k in range(hi + 1, nums[-1] + 1) if k in by_no), None)
-            if nxt is not None and nxt.date > ctx.period.end:
+        # En lucka per par av intilliggande nummer – ett fynd per lucka. Bygg aldrig upp alla tal i
+        # spannet: en serie med flera nummerintervall kan spänna över hundratals miljoner nummer.
+        for lower, upper in pairwise(sorted(seen)):
+            if upper - lower <= 1:
+                continue
+            lo, hi, nxt = lower + 1, upper - 1, by_no[upper]
+            if nxt.date > ctx.period.end:
                 continue
             count = hi - lo + 1
             label = f"{series}{lo}" if lo == hi else f"{series}{lo}–{series}{hi}"
@@ -202,7 +200,7 @@ def voucher_number_gap(ctx: RuleContext, rd: RuleDefinition) -> list[FindingCand
                         )
                     ),
                     key=(year.fiscal_year.start.isoformat(), series, lo, hi),
-                    period=f"{nxt.date:%Y-%m}" if nxt else ctx.period.spec,
+                    period=f"{nxt.date:%Y-%m}",
                     vouchers=[f"{series}{lo}"] if count == 1 else [f"{series}{lo}", f"{series}{hi}"],
                     details={"missing_from": lo, "missing_to": hi, "count": count},
                 )
@@ -913,24 +911,21 @@ def _norm_text(s: str) -> str:
     return re.sub(r"\s+", " ", s.lower()).strip()
 
 
-@rule("DUPLICATE_CANDIDATE")
-def duplicate_candidate(ctx: RuleContext, rd: RuleDefinition) -> list[FindingCandidate]:
-    p = ctx.params(rd)
-    min_amount, max_days = D(str(p["min_amount"])), int(p["max_days"])
-    min_sim = float(p["min_text_similarity"])
-    window = Period(ctx.period.start - timedelta(days=max_days), ctx.period.end, ctx.period.kind, "")
-    vouchers = [v for v in ctx.ledger.all_vouchers() if window.contains(v.date)]
+DUPLICATE_SKIPPED_PATTERNS = {
+    Pattern.VAT_SETTLEMENT,
+    Pattern.PAYROLL,
+    Pattern.PAYROLL_TAX,
+    Pattern.TAX_ACCOUNT,
+    Pattern.DEPRECIATION,
+    Pattern.ACCRUAL,
+}
+
+
+def _duplicate_buckets(vouchers: Iterable[Voucher], min_amount: Decimal) -> dict[tuple[int, Decimal], list[Voucher]]:
+    """Verifikationer per (konto, belopp): leverantörsskulder och kostnader utan leverantörsskuld."""
     by_amount: dict[tuple[int, Decimal], list[Voucher]] = defaultdict(list)
     for v in vouchers:
-        tags = classify(v)
-        if tags & {
-            Pattern.VAT_SETTLEMENT,
-            Pattern.PAYROLL,
-            Pattern.PAYROLL_TAX,
-            Pattern.TAX_ACCOUNT,
-            Pattern.DEPRECIATION,
-            Pattern.ACCRUAL,
-        }:
+        if classify(v) & DUPLICATE_SKIPPED_PATTERNS:
             continue
         for r in v.effective_rows:
             if r.account in PAYABLES and r.amount < 0 and -r.amount >= min_amount:
@@ -941,42 +936,80 @@ def duplicate_candidate(ctx: RuleContext, rd: RuleDefinition) -> list[FindingCan
                 and not any(x.account in PAYABLES for x in v.effective_rows)
             ):
                 by_amount[(r.account, r.amount)].append(v)
+    return by_amount
+
+
+def _similar(a: Voucher, b: Voucher) -> float:
+    return SequenceMatcher(None, _norm_text(a.text), _norm_text(b.text)).ratio()
+
+
+def _similar_chains(vouchers: list[Voucher], max_days: int, min_sim: float) -> list[list[Voucher]]:
+    """Kedjor där varje verifikation ligger högst max_days efter kedjans senaste och har snarlik text.
+
+    Varje verifikation hamnar i en enda kedja, så antalet kedjor är linjärt i antalet verifikationer.
+    """
+    ordered = sorted({(str(v.key), v.date): v for v in vouchers}.values(), key=lambda v: (v.date, str(v.key)))
+    chains: list[list[Voucher]] = []
+    open_chains: list[list[Voucher]] = []
+    for v in ordered:
+        open_chains = [c for c in open_chains if (v.date - c[-1].date).days <= max_days]
+        match = next((c for c in open_chains if _similar(c[-1], v) >= min_sim), None)
+        if match is None:
+            match = []
+            chains.append(match)
+            open_chains.append(match)
+        match.append(v)
+    return chains
+
+
+@rule("DUPLICATE_CANDIDATE")
+def duplicate_candidate(ctx: RuleContext, rd: RuleDefinition) -> list[FindingCandidate]:
+    """Möjlig dubbelbokning: två eller några få verifikationer med samma konto, belopp och snarlik
+    text nära i tid. En längre kedja är en återkommande serie (t.ex. dagliga köp), inga dubbletter.
+    Varje grupp ger ett fynd – aldrig ett per par, som växer kvadratiskt med serier av samma belopp."""
+    p = ctx.params(rd)
+    min_amount, max_days = D(str(p["min_amount"])), int(p["max_days"])
+    min_sim = float(p["min_text_similarity"])
+    max_group = int(p.get("max_group_size", 3))
     out = []
-    for (acc, amount), vs in by_amount.items():
-        vs = sorted({v.key: v for v in vs}.values(), key=lambda v: v.date)
-        for i in range(len(vs)):
-            for j in range(i + 1, len(vs)):
-                a, b = vs[i], vs[j]
-                days = (b.date - a.date).days
-                if days > max_days:
-                    break
-                if not (ctx.period.contains(a.date) or ctx.period.contains(b.date)):
-                    continue
-                sim = SequenceMatcher(None, _norm_text(a.text), _norm_text(b.text)).ratio()
-                if sim < min_sim:
-                    continue
-                f = _fact_amount(ctx, f"dup:{a.key}:{b.key}", "Belopp per verifikation", amount)
-                exact = _norm_text(a.text) == _norm_text(b.text)
-                out.append(
-                    candidate(
-                        ctx,
-                        rd,
-                        title=f"Möjlig dubbelbokning: {a.key} och {b.key}",
-                        description=(
-                            f"Samma belopp ({{f:{f.id}}}) på konto {acc}, "
-                            f"{'identisk' if exact else 'liknande'} text och {days} dagar mellan "
-                            f"verifikationerna ('{a.text}')."
-                        ),
-                        key=tuple(sorted([str(a.key), str(b.key)])),
-                        severity=Severity.HIGH if exact else Severity.MEDIUM,
-                        vouchers=[str(a.key), str(b.key)],
-                        accounts=[acc],
-                        amount=amount,
-                        facts=[f],
-                        details={"text_similarity": round(sim, 2), "days_apart": days},
-                    )
-                )
+    for (acc, amount), vouchers in _duplicate_buckets(ctx.ledger.all_vouchers(), min_amount).items():
+        for group in _similar_chains(vouchers, max_days, min_sim):
+            if 2 <= len(group) <= max_group and any(ctx.period.contains(v.date) for v in group):
+                out.append(_duplicate_finding(ctx, rd, acc, amount, group))
     return out
+
+
+def _duplicate_finding(
+    ctx: RuleContext, rd: RuleDefinition, acc: int, amount: Decimal, group: list[Voucher]
+) -> FindingCandidate:
+    keys = [str(v.key) for v in group]
+    first, days = group[0], (group[-1].date - group[0].date).days
+    exact = len({_norm_text(v.text) for v in group}) == 1
+    f = _fact_amount(ctx, "dup:" + ":".join(keys), "Belopp per verifikation", amount)
+    pair = len(group) == 2
+    return candidate(
+        ctx,
+        rd,
+        title=f"Möjlig dubbelbokning: {keys[0]} och {keys[1]}"
+        if pair
+        else f"Möjlig dubbelbokning: {len(group)} verifikationer ({', '.join(keys)})",
+        description=(
+            f"Samma belopp ({{f:{f.id}}}) på konto {acc}, {'identisk' if exact else 'liknande'} text och "
+            f"{days} dagar mellan {'verifikationerna' if pair else 'första och sista verifikationen'} "
+            f"('{first.text}')."
+        ),
+        key=tuple(sorted(keys)),
+        severity=Severity.HIGH if exact else Severity.MEDIUM,
+        vouchers=keys,
+        accounts=[acc],
+        amount=amount,
+        facts=[f],
+        details={
+            "text_similarity": round(min(_similar(a, b) for a, b in pairwise(group)), 2),
+            "days_apart": days,
+            "vouchers": len(group),
+        },
+    )
 
 
 @rule("LARGE_MANUAL_POSTING")
