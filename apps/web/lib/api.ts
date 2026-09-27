@@ -151,6 +151,8 @@ export type MetricExplanation = MetricComparison & {
     fact_id: string | null;
     note: string | null;
     evidence: MetricEvidence;
+    // `line:<kod>` om transaktionsbryggan kan förklara komponenten, annars `null` (t.ex. balanskomponenter).
+    bridge_target: string | null;
   }[];
   periods: { current: string; previous: string };
   versions: Record<string, string>;
@@ -188,6 +190,8 @@ export type AnalysisFinding = {
   priority_score: number;
   score_parts: Record<string, number>;
   demotion_reasons: string[];
+  // `account:<nr>` för det första icke-lönekontot i källorna, annars `null`.
+  bridge_target: string | null;
 };
 
 export type AnalysisFindings = {

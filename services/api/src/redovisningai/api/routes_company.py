@@ -358,7 +358,38 @@ def metric_explanation(
     payload = explanation.to_dict()
     for component_data, component in zip(payload["components"], explanation.components, strict=True):
         component_data["evidence"] = evidence_for_component(analysis.index, component, pair, limit=8).to_dict()
+        component_data["bridge_target"] = _bridge_target(analysis, component.code)
     return _mask_payroll(payload, principal)  # type: ignore[no-any-return]
+
+
+def _bridge_target(analysis: CompanyAnalysis, code: str) -> str | None:
+    """`line:<code>` om transaktionsbryggan kan förklara komponenten, annars `None`.
+
+    Prövas mot `target_accounts` i stället för att gissa: en balanskomponent (t.ex. `cash`,
+    `receivables`, `payables`) eller en kvotdel som inte är en resultatrad ger `None` här, så
+    klienten aldrig erbjuder en brygga som skulle svara 422.
+    """
+    target = f"line:{code}"
+    try:
+        analysis.target_accounts(target)
+    except (ValueError, KeyError):
+        return None
+    return target
+
+
+def _finding_bridge_target(candidate: FindingCandidate) -> str | None:
+    """`account:<nr>` för det första icke-lönekontot i fyndets källor, annars `None`."""
+    for source in candidate.sources:
+        account_list = source.get("accounts")
+        if not isinstance(account_list, str):
+            continue
+        for account in account_list.split(","):
+            if not account:
+                continue
+            number = int(account)
+            if number not in PAYROLL:
+                return f"account:{number}"
+    return None
 
 
 def _candidate_dict(candidate: FindingCandidate) -> dict[str, Any]:
@@ -378,6 +409,7 @@ def _candidate_dict(candidate: FindingCandidate) -> dict[str, Any]:
         "priority_score": candidate.priority_score,
         "score_parts": candidate.score_parts,
         "demotion_reasons": list(candidate.demotion_reasons),
+        "bridge_target": _finding_bridge_target(candidate),
     }
 
 

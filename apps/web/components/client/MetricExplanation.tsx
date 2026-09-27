@@ -183,10 +183,6 @@ function FindingRow({
   mode: Mode;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const firstAccount = item.sources
-    .flatMap((source) => source.accounts.split(","))
-    .map((account) => account.trim())
-    .find((account) => account !== "");
   return (
     <li className="rounded bg-white px-3 py-2">
       <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
@@ -229,7 +225,7 @@ function FindingRow({
               Visa nyckeltal: {metrics[code].label}
             </button>
           ))}
-          {firstAccount && <TransactionBridgeToggle base={base} target={`account:${firstAccount}`} period={period} mode={mode} />}
+          {item.bridge_target && <TransactionBridgeToggle base={base} target={item.bridge_target} period={period} mode={mode} />}
         </div>
       )}
     </li>
@@ -277,8 +273,8 @@ function MetricDetail({ code, period, mode, summary, base }: { code: string; per
               </div>
               {component.note && <p className="mt-1 text-[12px] text-muted">{component.note}</p>}
               <Evidence evidence={component.evidence} />
-              {component.source_level === "account" && (
-                <TransactionBridgeToggle base={base} target={`line:${component.code}`} period={period} mode={mode} />
+              {component.bridge_target && (
+                <TransactionBridgeToggle base={base} target={component.bridge_target} period={period} mode={mode} />
               )}
             </div>
           ))}

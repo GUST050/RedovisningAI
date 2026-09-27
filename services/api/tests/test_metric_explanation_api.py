@@ -72,6 +72,27 @@ def test_metric_explanation_api_masks_payroll_accounts_but_keeps_totals(monkeypa
             assert all(not 7000 <= row["account"] <= 7699 for row in component["evidence"][key])
 
 
+def test_metric_explanation_bridge_targets_are_valid_or_none(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """`bridge_target` is server-validated: every non-null value must work, cash has none."""
+    client, company_id = _client(monkeypatch)
+    bridge_url = f"/api/companies/{company_id}/transaction-bridge"
+
+    personnel = client.get(f"/api/companies/{company_id}/metric-explanations/personnel_share?period=2026-09&mode=yoy")
+    assert personnel.status_code == 200
+    components = personnel.json()["components"]
+    assert any(component["bridge_target"] is not None for component in components)
+    for component in components:
+        target = component["bridge_target"]
+        if target is None:
+            continue
+        bridge = client.get(bridge_url, params={"target": target, "period": "2026-09", "mode": "yoy"})
+        assert bridge.status_code == 200
+
+    cash = client.get(f"/api/companies/{company_id}/metric-explanations/cash?period=2026-09&mode=yoy")
+    assert cash.status_code == 200
+    assert all(component["bridge_target"] is None for component in cash.json()["components"])
+
+
 def test_metric_comparison_api_rejects_unknown_mode(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     client, company_id = _client(monkeypatch)
 
