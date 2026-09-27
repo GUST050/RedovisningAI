@@ -240,6 +240,22 @@ def test_genitive_names_in_the_question_are_sent_as_codes(analysis) -> None:  # 
     assert restored.endswith("Telias fakturor, Microsofts licenser och Fastighets Kvarnen:s hyra?")
 
 
+def test_explain_transactions_is_offered_only_with_approval_and_sends_codes(analysis) -> None:  # type: ignore[no-untyped-def]
+    store, guard = FactStore(), EgressGuard.for_task("A5", analysis)
+    period = analysis.period("2026-09")
+    offered = {t.name: t for t in analyst_tools(analysis, store, [], period, extended=True)}
+    tool = guard.wrap_tool(offered["explain_transactions"])
+
+    out = tool.handler({"target": "line:other_external", "period": "2026-09", "compare": ""})
+
+    change = store.get(out["change_fact_id"])
+    assert change is not None
+    assert sum(store.get(p["fact_id"]).value for p in out["parts"]) == change.value  # type: ignore[union-attr]
+    assert not leaks(strings(out), guard.pseudonyms.known_names())
+    assert any(re.fullmatch(r"M\d+", g["name"] or "") for g in out["groups"])
+    assert "explain_transactions" not in {t.name for t in analyst_tools(analysis, FactStore(), [], period)}
+
+
 def test_a1_and_a2_packages_carry_no_voucher_or_row_text(analysis, review) -> None:  # type: ignore[no-untyped-def]
     texts = {t for v in analysis.ledger.all_vouchers() for t in (v.text, *(r.text for r in v.rows)) if t}
     # Utan kontonamn blir 6110 ett okänt konto som A1 ska föreslå en plats för.

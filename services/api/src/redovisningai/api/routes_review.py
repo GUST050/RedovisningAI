@@ -633,16 +633,19 @@ def ask(company_id: uuid.UUID, body: AskIn, principal: Principal = Depends(get_p
     period = a.period(body.period)
     from redovisningai.facts.model import FactStore
 
+    ai = _ai(principal)
     with tenant_session(principal.ctx) as s:
         records = repo.load_findings(s, company_id)
+        # Utökat underlag bara med giltigt godkännande för varje leverantör som kan ta emot data.
+        extended = repo.extended_ai_data_allowed(s, company_id, ai.provider_names(), date.today())
     store = FactStore()
-    tools = analyst_tools(a, store, records, period)
+    tools = analyst_tools(a, store, records, period, extended=extended)
     pkg = {
         "question": body.question,
         "default_period": period.spec,
         "months_with_data": [x.isoformat() for x in a.index.months_with_data()][-24:],
     }
-    out = _ai(principal).run(
+    out = ai.run(
         "A5",
         pkg,
         store,

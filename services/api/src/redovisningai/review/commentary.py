@@ -165,7 +165,7 @@ def build_commentary(
         # The provider sees only the projected aggregates. Claim verification
         # is limited to facts included in that exact package.
         allowed_identifiers=allowed,
-        tools=commentary_tools(analysis, review.store, current),
+        tools=commentary_tools(analysis, review.store, current, extended=extended),
         tool_budget=A3_TOOL_BUDGET,
         egress=guard,
     )

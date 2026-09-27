@@ -12,8 +12,10 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 
+from redovisningai.accounting.comparisons import validate_comparison
 from redovisningai.accounting.metrics import REGISTRY
 from redovisningai.accounting.periods import Period, same_period_previous_year
+from redovisningai.accounting.transaction_bridge import transaction_bridge
 from redovisningai.ai.metric_change import metric_change_evidence
 from redovisningai.ai.providers.base import ToolSpec
 from redovisningai.analytics.counterparties import counterparty_subject
@@ -23,6 +25,7 @@ from redovisningai.findings.lifecycle import FindingRecord
 from redovisningai.review.analysis import PAYROLL, CompanyAnalysis, voucher_view
 
 PERIOD_PROP = {"type": "string", "description": "Period, t.ex. '2026-09', '2026-Q3', 'YTD:2026-09', 'R12:2026-09'"}
+MAX_TOOL_GROUPS = 5
 
 
 def _schema(props: dict[str, Any], required: list[str]) -> dict[str, Any]:
@@ -44,9 +47,96 @@ def _metric_change_schema() -> dict[str, Any]:
     )
 
 
-def commentary_tools(analysis: CompanyAnalysis, store: FactStore, default_period: Period) -> list[ToolSpec]:
+def _transactions_schema() -> dict[str, Any]:
+    return _schema(
+        {
+            "target": {
+                "type": "string",
+                "description": "'line:<kod>', 'category:<kod>' eller 'account:<nr>'",
+            },
+            "period": PERIOD_PROP,
+            "compare": {"type": "string", "description": "Jämförelseperiod, eller tom sträng"},
+        },
+        ["target", "period", "compare"],
+    )
+
+
+def _explain_transactions_tool(analysis: CompanyAnalysis, store: FactStore, default_period: Period) -> ToolSpec:
+    """Transaktionsbryggan (Task 13) som läsverktyg: bara med kundens godkännande av utökat underlag.
+
+    Delar en förändring på ett konto, en resultatrad eller en kategori efter motpart. Lönekonton tas
+    bort ur målet (aldrig till AI); blir målet tomt svarar verktyget med ett fel i stället för nollor.
+    """
+
+    def explain(inp: dict[str, Any]) -> Any:
+        # Sen import: api.routes_company importerar (via jobs.pipeline) review.commentary, som
+        # importerar det här verktyget – ett toppnivåimport här skulle bli en cirkelimport.
+        from redovisningai.api.routes_company import _validate_bridge_target
+
+        target = str(inp["target"])
+        current = analysis.period(inp.get("period") or default_period.spec)
+        previous = (
+            analysis.period(inp["compare"])
+            if inp.get("compare")
+            else same_period_previous_year(current, analysis.ledger)
+        )
+        try:
+            accounts, sign = analysis.target_accounts(target)
+            _validate_bridge_target(analysis, target, accounts)
+        except (ValueError, KeyError) as exc:
+            # KeyError.__str__ reprs its argument (extra quotes); args[0] is the plain message
+            # for both exceptions, since routes_company always raises them with one.
+            return {"error": str(exc.args[0]) if exc.args else str(exc)}
+        accounts = {a for a in accounts if a not in PAYROLL}
+        if not accounts:
+            return {"error": "Lönekonton förklaras inte för AI"}
+        pair = validate_comparison(current, previous, analysis.index)
+        bridge = transaction_bridge(
+            analysis.index, accounts, pair, target=target, aliases=analysis.ctx.aliases, sign=sign, store=store
+        )
+        return {
+            "change_fact_id": bridge.change_fact_id,
+            "parts": [
+                {
+                    "code": p.code,
+                    "fact_id": p.fact_id,
+                    "current_count": p.current_count,
+                    "previous_count": p.previous_count,
+                }
+                for p in bridge.parts
+            ],
+            "groups": [
+                {
+                    "name": g.name,
+                    "part": g.part,
+                    "current_count": g.current_count,
+                    "previous_count": g.previous_count,
+                    "fact_id": g.fact_id,
+                    "signals": sorted(g.signals),
+                }
+                for g in bridge.groups[:MAX_TOOL_GROUPS]
+            ],
+            "identified_share_fact_id": bridge.identified_share_fact_id,
+        }
+
+    return ToolSpec(
+        "explain_transactions",
+        "Förklarar en förändring efter motpart för ett konto, en resultatrad eller en kategori "
+        "('line:<kod>', 'category:<kod>' eller 'account:<nr>'): fyra ömsesidigt uteslutande delar och "
+        "de största motpartsgrupperna, som fakta-id. Motparter kommer som koder – skriv dem som "
+        "'{m:Mx}'. Tom compare = samma period i fjol.",
+        _transactions_schema(),
+        explain,
+    )
+
+
+def commentary_tools(
+    analysis: CompanyAnalysis, store: FactStore, default_period: Period, *, extended: bool = False
+) -> list[ToolSpec]:
     """A3:s läsverktyg (plan Task 8): nyckeltalsbryggan i minimalt format – koder, kontonummer och
-    fakta, aldrig etiketter, namn, fritext eller verifikationer (A3:s data-minimala gräns)."""
+    fakta, aldrig etiketter, namn, fritext eller verifikationer (A3:s data-minimala gräns).
+
+    `extended` erbjuder även `explain_transactions`, bara när kunden har godkänt utökat underlag."""
 
     def explain(inp: dict[str, Any]) -> Any:
         current = analysis.period(inp.get("period") or default_period.spec)
@@ -57,7 +147,7 @@ def commentary_tools(analysis: CompanyAnalysis, store: FactStore, default_period
         )
         return metric_change_evidence(analysis, inp["metric"], current, previous, store, minimal=True)
 
-    return [
+    tools = [
         ToolSpec(
             "explain_metric_change",
             "Bidragen bakom ett nyckeltals förändring (resultatrader/kvotdelar) och största kontoförändringar "
@@ -66,6 +156,9 @@ def commentary_tools(analysis: CompanyAnalysis, store: FactStore, default_period
             explain,
         )
     ]
+    if extended:
+        tools.append(_explain_transactions_tool(analysis, store, default_period))
+    return tools
 
 
 def analyst_tools(
@@ -73,6 +166,8 @@ def analyst_tools(
     store: FactStore,
     findings: list[FindingRecord],
     default_period: Period,
+    *,
+    extended: bool = False,
 ) -> list[ToolSpec]:
     def per(inp: dict[str, Any], key: str = "period") -> Period:
         return analysis.period(inp.get(key) or default_period.spec)
@@ -229,7 +324,7 @@ def analyst_tools(
             ]
         }
 
-    return [
+    tools = [
         ToolSpec(
             "compare_periods",
             "Nyckeltal för en period jämfört med en annan (standard: samma period i fjol).",
@@ -295,6 +390,9 @@ def analyst_tools(
             list_changes_since,
         ),
     ]
+    if extended:
+        tools.append(_explain_transactions_tool(analysis, store, default_period))
+    return tools
 
 
 def _strip_numbers(obj: Any) -> Any:

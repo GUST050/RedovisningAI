@@ -660,7 +660,9 @@ fakta med id som du hänvisar till med {f:id}. Hämta bara det som behövs. Svar
 Om underlaget inte räcker: säg det och föreslå vad som bör kontrolleras.
 Frågor om varför ett nyckeltal ändrats: börja med explain_metric_change. Beskriv de största bidragen
 som EXPLANATION med bidragets fakta-id (en bokföringsmässig effekt) och gå vid behov vidare till
-get_account_movements för ett enskilt konto. Möjliga affärsorsaker (pris, volym, kund, leverantör)
+get_account_movements för ett enskilt konto, eller – när den finns – explain_transactions för den
+resultatrad eller det konto som förklarar mest, för att se delarna och de största motpartsgrupperna.
+Skriv motparter som {m:Mx}, aldrig namnet. Möjliga affärsorsaker (pris, volym, kund, leverantör)
 är alltid HYPOTHESIS; en brygga bevisar inte varför något hände.""",
         schema={
             "type": "object",
