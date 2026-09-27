@@ -309,8 +309,11 @@ export type Finding = {
 
 export type Claim = { type: string; text: string; rendered: string; fact_ids: string[] };
 
+// Ett ärendes kundfråga kräver ett eget godkännande innan den får följa med i kundrapporten.
+export type QuestionDecision = { case_key: string; question: string; decision: "approve" | "reject"; reason: string; by: string; at: string };
+
 // AI-utkast som sparas per period: periodanalysen (A3) och kundmötesunderlaget (A4).
-export type AiDoc<T> = { task: string; data: T; source: string; created_at?: string; by?: string; approved?: boolean; edited_by?: string; stale?: boolean; compare_period?: string };
+export type AiDoc<T> = { task: string; data: T; source: string; created_at?: string; by?: string; approved?: boolean; edited_by?: string; stale?: boolean; compare_period?: string; question_decisions?: QuestionDecision[] };
 export type PeriodCommentary = AiDoc<{ claims: Claim[] }>;
 
 export type Case = {

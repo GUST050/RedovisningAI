@@ -60,6 +60,35 @@ def a3_transactions(
     return rows
 
 
+def a4_transaction_summary(
+    analysis: CompanyAnalysis, review: ReviewResult, current: Period, previous: Period
+) -> list[dict[str, str]]:
+    """A4:s underlag: samma urval av förändringar som A3, men bara delfakta – ingen motpartskod, inget
+    namn och ingen text. Faktumen läggs i granskningens faktalager (`review.store`), där verifieraren
+    och kundpaketets facts-lista slår upp dem."""
+    pair = validate_comparison(current, previous, analysis.index)
+    rows = []
+    for target in select_changes(analysis, current, previous):
+        accounts, sign = _bridge_accounts(analysis, target)
+        bridge = transaction_bridge(
+            analysis.index, accounts, pair, target=target, aliases=analysis.ctx.aliases, sign=sign, store=review.store
+        )
+        parts = {part.code: part for part in bridge.parts}
+        both = parts["both"]
+        if both.count_effect_fact_id is None or both.amount_effect_fact_id is None:
+            raise AssertionError("Bryggans del för båda perioderna saknar effektfakta")
+        rows.append(
+            {
+                "target": target,
+                "current_only_fact_id": parts["current_only"].fact_id,
+                "previous_only_fact_id": parts["previous_only"].fact_id,
+                "count_effect_fact_id": both.count_effect_fact_id,
+                "amount_effect_fact_id": both.amount_effect_fact_id,
+            }
+        )
+    return rows
+
+
 def _bridge_row(bridge: TransactionBridge, pseudonyms: CounterpartyPseudonyms) -> dict[str, Any]:
     return {
         "target": bridge.target,

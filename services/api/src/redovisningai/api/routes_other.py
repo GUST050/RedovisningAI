@@ -133,6 +133,16 @@ def _analysis_metadata_current(analysis: CompanyAnalysis, metadata: dict[str, An
         return False
 
 
+def _approved_case_questions(client_report_row: dict[str, Any], meeting: dict[str, Any]) -> list[dict[str, Any]]:
+    """Bara kundfrågor som har sitt eget godkännande i `question_decisions` – aldrig bara rapportens."""
+    approved = {
+        (d["case_key"], d["question"])
+        for d in client_report_row.get("question_decisions", [])
+        if d.get("decision") == "approve"
+    }
+    return [q for q in meeting.get("case_questions", []) if (q["case_key"], q["question"]) in approved]
+
+
 def _findings_dicts(s: Session, company_id: uuid.UUID, period: str) -> list[dict[str, Any]]:
     from redovisningai.api.routes_review import _finding_dict
 
@@ -171,7 +181,18 @@ def report_client(
             409,
             "Mötesunderlaget bygger på äldre bokföringsdata eller periodjämförelse. Skapa, granska och godkänn ett nytt underlag.",
         )
-    doc = client_report(a.overview(p, comparison), a.statements(p, comparison), meeting, principal.org_name)
+    # Ett allmänt godkännande av rapporten räcker inte: varje kundfråga från ett internt ärende
+    # kräver sitt eget godkännande, kontrollerat här vid export och uttryckligen skickat till byggaren.
+    approved_questions = (
+        _approved_case_questions(pr.client_report or {}, meeting) if pr is not None and meeting is not None else []
+    )
+    doc = client_report(
+        a.overview(p, comparison),
+        a.statements(p, comparison),
+        meeting,
+        principal.org_name,
+        approved_case_questions=approved_questions,
+    )
     repo.audit(s, principal.ctx, "report.client_exported", company_id, period=period, format=format)
     data = to_pdf(doc) if format == "pdf" else to_docx(doc)
     return _file(data, format, f"{company.name} {period} kundrapport")

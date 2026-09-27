@@ -162,6 +162,9 @@ ACTION_ORDER = [
 class Case:
     key: str
     title: str
+    # Mallens generella titel för den ledande regeln, utan sammanhang (verifikationer, period).
+    # Det enda ärendetexten A4 får se – aldrig `title`, som kan nämna motparter eller belopp.
+    topic: str
     root_cause: str
     suggested_action: str
     ask_client_suggested: bool
@@ -196,6 +199,7 @@ class Case:
         return {
             "key": self.key,
             "title": self.title,
+            "topic": self.topic,
             "root_cause": self.root_cause,
             "suggested_action": self.suggested_action,
             "ask_client_suggested": self.ask_client_suggested,
@@ -286,6 +290,9 @@ def build_cases(records: list[FindingRecord], *, include_closed: bool = False) -
         else:
             context = ", ".join(lead.vouchers[:2]) if lead.vouchers else lead.period
             title = f"{tpl.title} ({context})"
+        # Ämnet är alltid mallens generella titel (aldrig ärendets egen, som kan nämna motparter);
+        # utan mall används den ledande fyndets titel, precis som `title` gör för ett enda fynd.
+        topic = tpl.title if tpl else lead.title
         root = tpl.root_cause if tpl else lead.description
         if len(group) > 1:
             root += " Hör ihop med: " + "; ".join(f.title for f in group if f is not lead) + "."
@@ -313,6 +320,7 @@ def build_cases(records: list[FindingRecord], *, include_closed: bool = False) -
             Case(
                 key=key,
                 title=title,
+                topic=topic,
                 root_cause=root,
                 suggested_action=tpl.action if tpl else "Utred fyndet.",
                 ask_client_suggested=ask,

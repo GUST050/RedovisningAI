@@ -30,7 +30,7 @@ from redovisningai.devdata.generator import DEMO_PROFILES, generate
 from redovisningai.facts.model import FactStore, Unit, Visibility
 from redovisningai.portfolio.brief import brief_package
 from redovisningai.review.analysis import CompanyAnalysis, CompanyContext
-from redovisningai.review.transaction_package import a3_transactions
+from redovisningai.review.transaction_package import a3_transactions, a4_transaction_summary
 from redovisningai.rules.engine import CompanySettings
 
 AS_OF = date(2026, 10, 12)
@@ -363,6 +363,23 @@ def test_client_meeting_package_sends_only_what_the_text_needs(analysis, review)
     facts = analysis.client_package(review)["facts"]
     assert facts and all(set(f) <= {"id", "label", "display", "status", "period", "compare_period"} for f in facts)
     assert all(review.store.get(f["id"]) is not None for f in facts)
+
+
+def test_client_meeting_package_gets_grouped_facts_without_codes_or_text(analysis, review) -> None:  # type: ignore[no-untyped-def]
+    rows = a4_transaction_summary(analysis, review, analysis.period("2026-09"), analysis.period("2025-09"))
+    sent = json.dumps(rows, ensure_ascii=False)
+    ids = {value for row in rows for key, value in row.items() if key.endswith("_fact_id")}
+
+    assert rows and not re.search(r"\{m:|\bM\d+\b", sent)
+    assert ids and all(review.store.get(fid).visibility is Visibility.CLIENT_SAFE for fid in ids)  # type: ignore[union-attr]
+
+
+def test_case_questions_reject_even_unissued_bare_counterparty_codes() -> None:
+    from redovisningai.ai.tasks import ClientMeetingTask
+
+    output = {"summary": [], "questions": [], "case_questions": [{"case_key": "case", "question": "Vad gäller M999?"}]}
+    verified, _ = ClientMeetingTask().verify(output, {"ask_client": [{"key": "case"}]}, FactStore(), set())
+    assert verified["case_questions"] == []
 
 
 def test_weekly_brief_runs_on_the_light_model_tier() -> None:

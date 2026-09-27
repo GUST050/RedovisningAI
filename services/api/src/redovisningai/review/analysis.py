@@ -49,6 +49,11 @@ MATURITY_LABELS = {"COMPLETE": "fullständig", "PRELIMINARY": "preliminär", "NO
 CLIENT_FACT_FIELDS = ("id", "label", "display", "status", "period", "compare_period")
 
 
+def _client_fact_view(fact: dict[str, Any]) -> dict[str, Any]:
+    """Faktumet så som kundpaketet får se det: bara `CLIENT_FACT_FIELDS`, aldrig råvärde eller härkomst."""
+    return {k: fact[k] for k in CLIENT_FACT_FIELDS if fact.get(k) is not None}
+
+
 @dataclass(slots=True)
 class CompanyContext:
     company_id: str
@@ -428,8 +433,8 @@ class CompanyAnalysis:
                         "effect": str(c.effect),
                         "fact_id": c.fact_id,
                         "display": (
-                            fact.to_dict()["display"]
-                            if c.fact_id and (fact := store.get(c.fact_id)) is not None
+                            bridge_fact.to_dict()["display"]
+                            if c.fact_id and (bridge_fact := store.get(c.fact_id)) is not None
                             else None
                         ),
                     }
@@ -445,22 +450,34 @@ class CompanyAnalysis:
             "facts": [f.to_dict() for f in store if f.visibility is not Visibility.RESTRICTED_AML][:200],
         }
 
-    def client_package(self, review: ReviewResult, *, compare_spec: str | None = None) -> dict[str, Any]:
-        """Paket för kundmötesagenten: bara CLIENT_SAFE-fakta, inga PTL-uppgifter."""
+    def client_package(
+        self, review: ReviewResult, *, compare_spec: str | None = None, extended: bool = False
+    ) -> dict[str, Any]:
+        """Paket för kundmötesagenten: bara CLIENT_SAFE-fakta, inga PTL-uppgifter. `extended` lägger till
+        transaktionsbryggans grupperade, kundsäkra delfakta – bara med kundens godkännande."""
         base = self.commentary_package(review, compare_spec=compare_spec)
         safe_ids = {f.id for f in review.store if f.visibility is Visibility.CLIENT_SAFE}
         # Bara det mötestexten behöver: råvärden och härkomst kostar tokens och lockar till egna siffror.
-        base["facts"] = [
-            {k: f[k] for k in CLIENT_FACT_FIELDS if f.get(k) is not None} for f in base["facts"] if f["id"] in safe_ids
-        ]
+        base["facts"] = [_client_fact_view(f) for f in base["facts"] if f["id"] in safe_ids]
         base.pop("open_cases", None)
         base.pop("company", None)  # kundens namn behövs inte i texten och ska inte till AI-leverantören
         base["maturity"] = {k: v for k, v in base["maturity"].items() if k != "fact_id"}  # internt faktum
         base["ask_client"] = [
-            {"key": c.key, "title": c.title, "question_hint": None}
+            # `topic` är mallens generella titel – aldrig ärendets egen titel, som kan nämna motparter.
+            {"key": c.key, "topic": c.topic, "question_hint": None}
             for c in review.cases
             if c.ask_client_suggested and c.visibility is Visibility.CLIENT_SAFE and c.status != "CLOSED"
         ]
+        if extended:
+            from redovisningai.review.transaction_package import a4_transaction_summary  # sen import: cirkulär annars
+
+            current = self.period(base["period"]["spec"])
+            previous = self.period(base["compare"]["spec"])
+            rows = a4_transaction_summary(self, review, current, previous)
+            fact_ids = {value for row in rows for key, value in row.items() if key.endswith("_fact_id")}
+            bridge_facts = [f for fid in fact_ids if (f := review.store.get(fid)) is not None]
+            base["facts"] += [_client_fact_view(f.to_dict()) for f in bridge_facts]
+            base["transactions"] = rows
         return base
 
     def case_package(self, review: ReviewResult) -> dict[str, Any]:

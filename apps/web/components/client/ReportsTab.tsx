@@ -2,13 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { AiBadge, Button, Card, ErrorBox, Field, Loading, StatusBadge, cx, inputCls } from "@/components/ui";
-import { type AiDoc, ApiError, type Claim, type PeriodCommentary, send, useLoad } from "@/lib/api";
+import { type AiDoc, ApiError, type Claim, type PeriodCommentary, type QuestionDecision, send, useLoad } from "@/lib/api";
 import { dateTime, monthLabel } from "@/lib/format";
 import { PeriodAnalysis } from "./PeriodAnalysis";
 import { useClient } from "./shared";
 
 type Meeting = { summary: Claim[]; questions: Claim[]; case_questions?: { case_key: string; question: string }[] };
 type DecisionDraft = { decision: "approve" | "reject" | "correct" | ""; reason: string; corrected_text: string };
+type QuestionDecisionDraft = { decision: "approve" | "reject" | ""; reason: string };
 
 type PeriodDetail = {
   period: string;
@@ -182,14 +183,15 @@ function MeetingCard({ d, busy, onGenerate, onSaved }: { d: PeriodDetail; busy: 
   const [summary, setSummary] = useState("");
   const [questions, setQuestions] = useState("");
   const [decisions, setDecisions] = useState<Record<number, DecisionDraft>>({});
+  const [caseDecisions, setCaseDecisions] = useState<Record<string, QuestionDecisionDraft>>({});
   const [err, setErr] = useState<unknown>(null);
+  const caseQuestions = report?.data.case_questions ?? [];
   useEffect(() => {
     if (!report) return;
     setSummary(report.data.summary.map((c) => c.rendered ?? c.text).join("\n"));
     setDecisions({});
-    setQuestions(
-      [...report.data.questions.map((c) => c.rendered ?? c.text), ...(report.data.case_questions ?? []).map((q) => q.question)].join("\n"),
-    );
+    setQuestions(report.data.questions.map((c) => c.rendered ?? c.text).join("\n"));
+    setCaseDecisions({});
   }, [report]);
   const canApprove = me.permissions.approve_reports || me.role === "ADMIN";
   const summaryLines = summary.split("\n").map((line) => line.trim()).filter(Boolean);
@@ -198,6 +200,14 @@ function MeetingCard({ d, busy, onGenerate, onSaved }: { d: PeriodDetail; busy: 
     return !!decision?.decision && decision.reason.trim().length >= 3 &&
       (decision.decision !== "correct" || decision.corrected_text.trim().length >= 3) && line.length >= 3;
   });
+  // Ett godkännande av ärendefrågor är valfritt (obeslutade frågor kommer bara inte med i
+  // kundrapporten), men en påbörjad fråga måste ha en motivering innan den kan sparas.
+  const canApproveCaseQuestions = caseQuestions.every((q) => {
+    const draft = caseDecisions[q.case_key];
+    return !draft?.decision || draft.reason.trim().length >= 3;
+  });
+  const savedCaseDecision = (q: { case_key: string; question: string }): QuestionDecision | undefined =>
+    report?.question_decisions?.find((dec) => dec.case_key === q.case_key && dec.question === q.question);
   const save = (approve: boolean) =>
     send(`${base}/periods/${month}/meeting`, "PUT", {
       summary: summaryLines,
@@ -210,6 +220,14 @@ function MeetingCard({ d, busy, onGenerate, onSaved }: { d: PeriodDetail; busy: 
           reason: decisions[index].reason,
           corrected_text: decisions[index].decision === "correct" ? decisions[index].corrected_text : undefined,
         })),
+        question_decisions: caseQuestions
+          .filter((q) => caseDecisions[q.case_key]?.decision)
+          .map((q) => ({
+            case_key: q.case_key,
+            question: q.question,
+            decision: caseDecisions[q.case_key].decision,
+            reason: caseDecisions[q.case_key].reason,
+          })),
       } : {}),
       approve,
     })
@@ -272,10 +290,56 @@ function MeetingCard({ d, busy, onGenerate, onSaved }: { d: PeriodDetail; busy: 
           <Field label="Att diskutera på mötet (en fråga per rad)">
             <textarea className={cx(inputCls, "h-28")} value={questions} onChange={(e) => setQuestions(e.target.value)} disabled={!me.permissions.write} />
           </Field>
+          {caseQuestions.length > 0 && (
+            <div className="space-y-2 rounded-md border border-line p-3">
+              <h3 className="text-[13px] font-semibold">Kundfrågor från ärenden</h3>
+              <p className="text-[11px] text-muted">
+                Varje fråga härrör från ett internt ärende och kräver ett eget godkännande – ett allmänt godkännande av rapporten räcker inte.
+              </p>
+              {caseQuestions.map((q) => {
+                const saved = savedCaseDecision(q);
+                const draft = caseDecisions[q.case_key] ?? { decision: (saved?.decision ?? "") as QuestionDecisionDraft["decision"], reason: saved?.reason ?? "" };
+                return (
+                  <div key={q.case_key} className="space-y-2 rounded bg-canvas p-2">
+                    <p className="text-[12px]">{q.question}</p>
+                    {saved ? (
+                      saved.decision === "approve" ? <StatusBadge status="APPROVED" /> : <span className="text-muted text-[12px]">Avvisad – kommer inte med i kundrapporten</span>
+                    ) : (
+                      <span className="text-medium text-[12px]">Väntar på eget godkännande – kommer inte med i kundrapporten</span>
+                    )}
+                    {me.permissions.write && (
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        <Field label="Beslut">
+                          <select aria-label={`Beslut för kundfråga: ${q.question}`} className={cx(inputCls, "h-9")} value={draft.decision} onChange={(e) => setCaseDecisions((old) => ({ ...old, [q.case_key]: { ...draft, decision: e.target.value as QuestionDecisionDraft["decision"] } }))}>
+                            <option value="">Välj beslut</option>
+                            <option value="approve">Godkänn för kund</option>
+                            <option value="reject">Avvisa</option>
+                          </select>
+                        </Field>
+                        <Field label="Motivering">
+                          <input aria-label={`Motivering för kundfråga: ${q.question}`} className={inputCls} value={draft.reason} onChange={(e) => setCaseDecisions((old) => ({ ...old, [q.case_key]: { ...draft, reason: e.target.value } }))} />
+                        </Field>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
           {me.permissions.write && (
             <div className="flex gap-2">
               <Button variant="secondary" onClick={() => save(false)}>Spara</Button>
-              <Button disabled={!canApprove || report.stale || !canApproveClaims} title={!canApprove ? "Kräver behörighet att godkänna kundrapporter" : report.stale ? "Skapa ett aktuellt utkast före godkännande" : !canApproveClaims ? "Fatta beslut med motivering för varje slutsats" : undefined} onClick={() => save(true)}>
+              <Button
+                disabled={!canApprove || report.stale || !canApproveClaims || !canApproveCaseQuestions}
+                title={
+                  !canApprove ? "Kräver behörighet att godkänna kundrapporter"
+                  : report.stale ? "Skapa ett aktuellt utkast före godkännande"
+                  : !canApproveClaims ? "Fatta beslut med motivering för varje slutsats"
+                  : !canApproveCaseQuestions ? "Fatta beslut med motivering för varje kundfråga du har börjat besluta om"
+                  : undefined
+                }
+                onClick={() => save(true)}
+              >
                 Spara och godkänn för kund
               </Button>
             </div>

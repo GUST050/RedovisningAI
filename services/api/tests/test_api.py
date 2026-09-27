@@ -522,3 +522,37 @@ def test_only_report_approvers_can_approve_extended_ai_data(env) -> None:  # typ
     listed = cl.get(url, headers=H("kalle@api.se")).json()
     assert [a["revoked_at"] is not None for a in listed["approvals"]] == [True]
     assert listed["extended_active"] is False
+
+
+def test_questions_from_internal_cases_reach_the_client_only_after_their_own_approval(env) -> None:  # type: ignore[no-untyped-def]
+    import docx  # type: ignore[import-untyped]
+
+    cl, cid, admin = env["client"], env["cid"], H("admin@api.se")
+    url = f"/api/companies/{cid}/periods/2026-09/meeting"
+    created = cl.post(url, headers=H("kalle@api.se")).json()
+    assert created["data"]["case_questions"], "demobolaget ska ha minst en ärendefråga till kunden"
+    question = created["data"]["case_questions"][0]
+    line = "Omsättningen ska följas upp med kunden."
+    body = {
+        "summary": [line],
+        "questions": [],
+        "decisions": [{"index": 0, "statement": line, "decision": "approve", "reason": "Kontrollerat mot bokföringen"}],
+        "approve": True,
+    }
+    decision = {**question, "decision": "approve", "reason": "Konsulten har stämt av frågan."}
+
+    def exported_text() -> str:
+        report = cl.get(f"/api/companies/{cid}/reports/client?period=2026-09&format=docx", headers=admin)
+        assert report.status_code == 200
+        return "\n".join(p.text for p in docx.Document(io.BytesIO(report.content)).paragraphs)
+
+    try:
+        assert cl.put(url, json=body, headers=admin).status_code == 200
+        assert question["question"] not in exported_text()
+
+        changed = {**decision, "question": question["question"] + " Ändrad."}
+        assert cl.put(url, json={**body, "question_decisions": [changed]}, headers=admin).status_code == 422
+        assert cl.put(url, json={**body, "question_decisions": [decision]}, headers=admin).status_code == 200
+        assert question["question"] in exported_text()
+    finally:
+        cl.post(url, headers=H("kalle@api.se"))  # lämna ett ogodkänt utkast åt senare tester

@@ -158,7 +158,7 @@ def period_commentary_input(package: dict[str, Any]) -> dict[str, Any]:
                 projected_fact["accounts"] = accounts
         facts.append(projected_fact)
 
-    projected: dict[str, Any] = {
+    result: dict[str, Any] = {
         "period": package.get("period"),
         "compare": package.get("compare"),
         "comparison_status": package.get("comparison_status"),
@@ -176,8 +176,8 @@ def period_commentary_input(package: dict[str, Any]) -> dict[str, Any]:
         "facts": facts,
     }
     if "transactions" in package:
-        projected["transactions"] = transactions
-    return projected
+        result["transactions"] = transactions
+    return result
 
 
 TRANSACTION_PART_FIELDS = (
@@ -586,7 +586,11 @@ affärsmässig, begriplig, utan redovisningsjargong, utan interna granskningsdet
 Du får bara använda fakta i paketet (alla är godkända för kund). Ge:
 - summary: 3–5 påståenden om hur det går och vad som förändrats,
 - questions: 3–7 frågor eller råd att ta upp på mötet,
-- case_questions: för varje ärende i "ask_client" en vänlig fråga till kunden (en per ärende).""",
+- case_questions: för varje ärende i "ask_client" en vänlig fråga till kunden om dess topic (en per
+  ärende); utgå bara från topic, aldrig en ärende-, verifikations- eller radtext du inte fått.
+transactions, när paketet har dem: grupperade förändringar – bara i aktuell jämförelseperiod, bara i
+den tidigare perioden, fler eller färre verifikationer och ändrat belopp per verifikation. Nämn
+aldrig enskilda motparter; det finns inga koder för dem i det här underlaget.""",
         schema={
             "type": "object",
             "properties": {
@@ -623,7 +627,7 @@ Du får bara använda fakta i paketet (alla är godkända för kund). Ge:
         case_q = [
             {
                 "case_key": c["key"],
-                "question": c.get("question_hint") or f"Kan du berätta mer om följande: {c['title'].lower()}?",
+                "question": c.get("question_hint") or f"Kan du berätta mer om följande: {c['topic'].lower()}?",
             }
             for c in package.get("ask_client", [])
         ]
@@ -632,12 +636,20 @@ Du får bara använda fakta i paketet (alla är godkända för kund). Ge:
     def verify(self, output, package, store, allowed, pseudonyms=frozenset()):  # type: ignore[no-untyped-def]
         out, res = _verify_claim_fields(output, ["summary", "questions"], store, allowed, True, pseudonyms)
         keys = {c["key"] for c in package.get("ask_client", [])}
-        from redovisningai.ai.verifier import UNSAFE, find_literal_numbers
+        from redovisningai.ai.verifier import BARE_CODE, COUNTERPARTY_PLACEHOLDER, UNSAFE, find_literal_numbers
 
         cq = []
         for q in output.get("case_questions", []):
             text = str(q.get("question", ""))
-            if q.get("case_key") in keys and not UNSAFE.search(text) and not find_literal_numbers(text, allowed):
+            # Kundfrågan får varken innehålla platshållare eller en M-kod, även om koden aldrig
+            # delades ut i denna körning.
+            if (
+                q.get("case_key") in keys
+                and not UNSAFE.search(text)
+                and not find_literal_numbers(text, allowed)
+                and not COUNTERPARTY_PLACEHOLDER.search(text)
+                and not BARE_CODE.search(text)
+            ):
                 cq.append({"case_key": q["case_key"], "question": text})
         out["case_questions"] = cq
         return out, res

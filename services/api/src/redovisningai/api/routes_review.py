@@ -24,6 +24,7 @@ from redovisningai.api.deps import (
     load_analysis,
     require_write,
 )
+from redovisningai.cases.builder import ACTION_ORDER, TEMPLATES
 from redovisningai.db import models as m
 from redovisningai.db import repo
 from redovisningai.db.session import TenantContext, tenant_session
@@ -38,6 +39,7 @@ from redovisningai.review.workflow import (
     create_question,
     decide_findings,
 )
+from redovisningai.rules.engine import Severity
 
 router = APIRouter(prefix="/api/companies/{company_id}", tags=["granskning"])
 
@@ -350,8 +352,11 @@ def meeting(
     principal: Principal = Depends(require_write),
 ) -> dict[str, Any]:
     a, rev = _review_result(principal, company_id, period)
+    ai = _ai(principal)
+    with tenant_session(principal.ctx) as s:  # utökat underlag bara med giltigt godkännande för varje leverantör
+        extended = repo.extended_ai_data_allowed(s, company_id, ai.provider_names(), date.today())
     try:
-        pkg = a.client_package(rev, compare_spec=compare)
+        pkg = a.client_package(rev, compare_spec=compare, extended=extended)
     except ValueError as exc:
         raise HTTPException(422, f"Ogiltig jämförelseperiod: {compare}") from exc
     current = a.period(pkg["period"]["spec"])
@@ -365,8 +370,9 @@ def meeting(
         "calculation_version": CALC_VERSION,
         "prompt_version": A4_PROMPT_VERSION,
         "task": "A4",
+        "extended": extended,
     }
-    out = _ai(principal).run(
+    out = ai.run(
         "A4",
         pkg,
         rev.store,
@@ -441,10 +447,45 @@ def _apply_claim_decisions(
     return accepted, audit
 
 
+class QuestionDecisionIn(BaseModel):
+    case_key: str
+    question: str = Field(min_length=3, max_length=2000)
+    decision: Literal["approve", "reject"]
+    reason: str = Field(min_length=3, max_length=2000)
+
+
+def _apply_question_decisions(
+    existing: list[dict[str, Any]],
+    case_questions: list[dict[str, Any]],
+    decisions: list[QuestionDecisionIn],
+    principal_email: str,
+    now: datetime,
+) -> list[dict[str, Any]]:
+    """Varje beslut måste gälla en kundfråga i utkastet med exakt samma text – annars har frågan
+    ändrats sedan den granskades. Beslut om andra frågor (från tidigare redigeringar) bevaras; bara
+    ett nytt utkast nollställer dem."""
+    known = {(cq["case_key"], str(cq["question"]).strip()) for cq in case_questions}
+    merged = {(d["case_key"], d["question"]): d for d in existing}
+    for decision in decisions:
+        question = decision.question.strip()
+        if (decision.case_key, question) not in known:
+            raise ValueError("En kundfråga har ändrats efter granskning; granska den igen.")
+        merged[(decision.case_key, question)] = {
+            "case_key": decision.case_key,
+            "question": question,
+            "decision": decision.decision,
+            "reason": decision.reason.strip(),
+            "by": principal_email,
+            "at": now.isoformat(),
+        }
+    return list(merged.values())
+
+
 class MeetingEditIn(BaseModel):
     summary: list[str] = Field(default_factory=list)
     questions: list[str] = Field(default_factory=list)
     decisions: list[ClaimDecisionIn] = Field(default_factory=list)
+    question_decisions: list[QuestionDecisionIn] = Field(default_factory=list)
     approve: bool = False
 
 
@@ -476,6 +517,14 @@ def edit_meeting(
     if body.approve:
         try:
             content["summary"], data["claim_decisions"] = _apply_claim_decisions(body.summary, body.decisions)
+            # Frågebesluten valideras och sparas innan pr.client_report ändras (se docstring ovan).
+            data["question_decisions"] = _apply_question_decisions(
+                data.get("question_decisions", []),
+                content.get("case_questions", []),
+                body.question_decisions,
+                principal.email,
+                datetime.now(),
+            )
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
     else:
@@ -507,6 +556,24 @@ class QuestionIn(BaseModel):
     recipient_email: str | None = None
 
 
+def _case_topic(findings: list[m.FindingRow]) -> str:
+    """Ärendets ämne för A4: mallens generella titel för den ledande regeln, annars den första
+    regel bland fynden som har en mall. Aldrig ärendets egen titel – den kan nämna motparter."""
+    if findings:
+
+        def rank(f: m.FindingRow) -> tuple[int, int]:
+            order = ACTION_ORDER.index(f.rule_code) if f.rule_code in ACTION_ORDER else len(ACTION_ORDER)
+            return (-Severity(f.severity).rank, order)
+
+        lead = min(findings, key=rank)
+        if tpl := TEMPLATES.get(lead.rule_code):
+            return tpl.title
+        for f in findings:
+            if tpl := TEMPLATES.get(f.rule_code):
+                return tpl.title
+    return "ärendet"
+
+
 @router.get("/cases/{case_key}/question-draft")
 def question_draft(
     company_id: uuid.UUID, case_key: str, principal: Principal = Depends(require_write), s: Session = Depends(db)
@@ -519,13 +586,18 @@ def question_draft(
         raise HTTPException(409, "Frågor om PTL-signaler kan inte skickas till kunden.")
     from redovisningai.facts.model import FactStore
 
+    findings = list(
+        s.scalars(
+            select(m.FindingRow).where(m.FindingRow.company_id == company_id, m.FindingRow.case_key == case_key)
+        ).all()
+    )
     pkg = {
-        "ask_client": [{"key": case.case_key, "title": case.title, "question_hint": None}],
+        "ask_client": [{"key": case.case_key, "topic": _case_topic(findings), "question_hint": None}],
         "bridge": {},
         "metrics": {},
         "facts": [],
     }
-    # Ärendets titel kan nämna motparter; gränsen byter dem mot koder med bokföringens namn.
+    # Bara ämnet (mallens generella titel) går till A4 – aldrig ärendets titel, som kan nämna motparter.
     out = _ai(principal).run(
         "A4",
         pkg,
@@ -536,6 +608,7 @@ def question_draft(
     )
     q = next((x["question"] for x in out.data.get("case_questions", []) if x["case_key"] == case_key), None)
     return {
+        # Det lokala reservsvaret får använda ärendets titel: det skickas aldrig till AI-leverantören.
         "text": q or f"Hej! Vi har en fråga om följande: {case.title.lower()}. Kan du berätta mer?",
         "source": out.source,
     }

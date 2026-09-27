@@ -53,6 +53,7 @@ PACKAGE_FIELDS: dict[str, frozenset[str]] = {
             "maturity",
             "facts",
             "ask_client",
+            "transactions",  # bara med kundens godkännande av utökat underlag
         }
     ),
     "A5": frozenset({"question", "default_period", "months_with_data"}),

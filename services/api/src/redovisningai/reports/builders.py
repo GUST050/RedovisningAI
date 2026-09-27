@@ -37,7 +37,12 @@ def _claims_text(claims: list[dict[str, Any]]) -> list[str]:
 
 
 def client_report(
-    overview: dict[str, Any], statements: dict[str, Any], meeting: dict[str, Any] | None, firm_name: str
+    overview: dict[str, Any],
+    statements: dict[str, Any],
+    meeting: dict[str, Any] | None,
+    firm_name: str,
+    *,
+    approved_case_questions: list[dict[str, Any]] | None = None,
 ) -> Document:
     """Kundrapport. Byggs bara av nyckeltal, resultaträkning och godkända AI-texter (CLIENT_SAFE)."""
     company = overview["company"]["name"]
@@ -79,8 +84,11 @@ def client_report(
             table=Table(["", inc["period"], inc["compare"] or "", "Förändring"], rows, numeric_cols={1, 2, 3}),
         )
     )
-    if meeting and (meeting.get("questions") or meeting.get("case_questions")):
-        bullets = _claims_text(meeting.get("questions", []))
+    if meeting and (meeting.get("questions") or approved_case_questions):
+        # Direktanrop (t.ex. CLI) får aldrig ärendefrågor utan ett separat godkännande.
+        bullets = _claims_text(meeting.get("questions", [])) + [
+            str(q["question"]) for q in approved_case_questions or []
+        ]
         sections.append(Section("Att diskutera på mötet", bullets=bullets))
     return Document(
         title=f"{company} – månadsrapport",
