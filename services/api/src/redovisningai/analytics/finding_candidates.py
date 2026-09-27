@@ -19,7 +19,7 @@ from redovisningai.analytics.spend import collect_spend, detect_level_shift, spe
 from redovisningai.domain.ledger import Voucher
 from redovisningai.facts.model import FactStatus
 
-RULE_VERSION = "finding-candidates-v2"  # v2: återföring/rättelse och samtidig omsättnings- och kostnadsförändring
+RULE_VERSION = "finding-candidates-v3"  # v3: säsongstakt; v2: återföring/rättelse och marginalpress
 ZERO = Decimal("0")
 USABLE = (FactStatus.CALCULATED, FactStatus.PARTIAL)
 COMBINATION_MIN_SEK = Decimal("1000")  # minsta förändring per signal i en kombination
@@ -27,6 +27,7 @@ REVERSAL_MIN_SEK = Decimal("1000")  # minsta resultatpåverkan för en återför
 REVERSAL_LOOKBACK_MONTHS = 12  # hur långt före perioden originalverifikationen får ligga
 RESULT_ACCOUNTS = range(3000, 8990)  # resultatkonton utan bokslutsposterna 8990–8999
 OPERATING_COST_LINES = ("materials", "other_external", "personnel", "depreciation", "other_operating_expenses")
+CADENCE_MONTHS = {"monthly": 1, "quarterly": 3, "annual": 12}  # återkommande kostnads takt i månader
 COMBINATION_NOTE = (
     "Två samtidiga förändringar i bokföringen; sambandet mellan dem är inte en fastställd orsak. "
     "Kontrollera respektive konto och verifikationer i båda perioderna."
@@ -332,10 +333,15 @@ def _spend_pattern_candidates(
         index.coverage.get(month) == "vouchers" for month in level_history
     )
     results: list[FindingCandidate] = []
+    months_apart = (pair.current.end.year - pair.previous.end.year) * 12 + (
+        pair.current.end.month - pair.previous.end.month
+    )
     for row in report.counterparties:
-        recurring = row["recurrence"] in {"monthly", "quarterly", "annual"}
-        if not has_full_recent_history or row["confidence"] < 0.98 or not recurring:
+        cadence = CADENCE_MONTHS.get(str(row["recurrence"]))
+        if not has_full_recent_history or row["confidence"] < 0.98 or cadence is None:
             continue
+        if months_apart % cadence:
+            continue  # säsong: perioderna ligger inte hela takter isär, så takten förklarar skillnaden
         current_amount = Decimal(row["amount"])
         previous_amount = Decimal(row["compare"])
         change = current_amount - previous_amount

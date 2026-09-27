@@ -450,3 +450,43 @@ def test_a3_drafts_go_stale_when_the_finding_rules_or_their_ranking_change() -> 
     assert RULE_VERSION in A3_PROMPT_VERSION and PRIORITY_VERSION in A3_PROMPT_VERSION
     assert {"correction_reversal", "margin_pressure"} <= set(A3_FINDING_LABELS)
     assert not any(word in label for label in A3_FINDING_LABELS.values() for word in CAUSAL_WORDS)
+
+
+def _rent_and_quarterly_audit() -> LedgerIndex:
+    vouchers = []
+    for number, first_day in enumerate(months_between(date(2024, 10, 1), date(2026, 9, 30)), start=1):
+        vouchers.append(
+            Voucher(
+                "A",
+                f"{number}h",
+                first_day.replace(day=5),
+                "Hyra",
+                (Row(5010, Decimal("5000"), text="Hyresvärden"), Row(2440, Decimal("-5000"))),
+            )
+        )
+        if first_day.month in (3, 6, 9, 12):  # revision varje kvartal
+            vouchers.append(
+                Voucher(
+                    "A",
+                    f"{number}r",
+                    first_day.replace(day=20),
+                    "Faktura Revisorn",
+                    (Row(6420, Decimal("4000"), text="Revisorn"), Row(2440, Decimal("-4000"))),
+                )
+            )
+    return _index(vouchers, (2024, 2025, 2026))
+
+
+@pytest.mark.parametrize(
+    "previous",
+    [month(2025, 9), month(2026, 8), month(2026, 7)],
+    ids=["samma-manad-i-fjol", "foregaende-manad", "tva-manader-tidigare"],
+)
+def test_a_quarterly_cost_in_its_usual_month_is_season_not_a_new_cost(previous) -> None:  # type: ignore[no-untyped-def]
+    index = _rent_and_quarterly_audit()
+    pair = ComparisonPair(month(2026, 9), previous, FactStatus.CALCULATED)
+    aliases = {"hyresvarden": "Hyresvärden AB", "revisorn": "Revisorn AB"}
+
+    candidates = collect_candidates(index, pair, [], mapping_version="map-v1", aliases=aliases)
+
+    assert [c.code for c in candidates] == []  # takten förklarar skillnaden, inget nytt eller uteblivet
