@@ -209,3 +209,6 @@ Task 14: deferred check: browser check of the settings card; 0004 down/up round 
 Task 14: complete (commits 7c2a655..beca844, review clean) — already pushed in 1dabc16, now reviewed.
 Task 15: dispatched implementer (sonnet) at 23:37, BASE fc6611f, report task-15-report.md
 - Ruling R30 (Task 15): explain_transactions pairs periods like explain_metric_change (empty compare = same period last year), drops payroll accounts and answers an error when none remain, returns at most 5 groups without voucher refs, and reuses Task 14's single approval helper for /ask — the brief left these open — cost if wrong: small tool contract changes.
+Task 15: implementer DONE, commit 534c1e1; 301 passed, 2 skipped; eval clean. Kept a part `code` in the tool output (needed to tell parts apart).
+Task 15: deferred check: mypy's configured packages do not cover ai/review/api, so mypy never type-checked the changed modules — final verification runs mypy explicitly on every file changed since c72fa71.
+Task 15: review (sonnet) dispatched on 9bb78ac..534c1e1
