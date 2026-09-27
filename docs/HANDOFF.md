@@ -212,3 +212,8 @@ Task 15: dispatched implementer (sonnet) at 23:37, BASE fc6611f, report task-15-
 Task 15: implementer DONE, commit 534c1e1; 301 passed, 2 skipped; eval clean. Kept a part `code` in the tool output (needed to tell parts apart).
 Task 15: deferred check: mypy's configured packages do not cover ai/review/api, so mypy never type-checked the changed modules — final verification runs mypy explicitly on every file changed since c72fa71.
 Task 15: review (sonnet) dispatched on 9bb78ac..534c1e1
+Task 15: review (sonnet) on 9bb78ac..534c1e1 — spec ✅, quality Approved, no Critical/Important (error paths and masking reproduced on demo data).
+Task 15: minor (deferred): payroll stripping and the top-5 constant duplicated between ai/tools.py and review/transaction_package.py (MAX_TOOL_GROUPS vs MAX_GROUPS) — one shared helper next to target_accounts.
+Task 15: minor (deferred): _validate_bridge_target lives in api/routes_company.py and is imported (lazily) by ai/tools.py — move the validation next to target_accounts in review/analysis.py.
+Task 15: minor (deferred): no pytest pins the tool's error paths (unknown category, unused account, unknown kind, payroll-only).
+Task 15: complete (commits 9bb78ac..534c1e1, review clean)
