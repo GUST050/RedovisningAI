@@ -168,6 +168,11 @@ export type AnalysisFinding = {
     accounts: string;
     fact_id?: string;
     source_level: string;
+    // Kombinationsfynd: vilken signal källan gäller och dess värde i båda perioderna (kronor).
+    signal?: string;
+    current?: string;
+    previous?: string;
+    change?: string;
     references?: {
       period: string;
       voucher: string | null;

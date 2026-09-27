@@ -16,6 +16,9 @@ const STATUS: Record<string, string> = {
   ERROR: "Kunde inte beräknas",
 };
 
+// Signaler i kombinationsfynd (t.ex. samtidigt lägre omsättning och högre kostnader).
+const SIGNAL_LABELS: Record<string, string> = { net_sales: "Nettoomsättning", operating_costs: "Rörelsekostnader" };
+
 function amount(value: string | null, unit: string, signed = false, isChange = false) {
   if (value === null) return "–";
   if (unit === "SEK") return sek(value, { signed });
@@ -158,6 +161,12 @@ function FindingRow({ item, metrics, onSelectMetric }: { item: AnalysisFinding; 
           <p className="text-muted">Jämförelse: {item.period_pair[0]} mot {item.period_pair[1]}. Kontrollera konton och verifikationer innan du drar en slutsats.</p>
           {item.sources.map((source, sourceIndex) => (
             <div key={`${item.group_key}-${sourceIndex}`} className="rounded border border-line bg-canvas p-2">
+              {source.signal && source.current != null && source.previous != null && (
+                <p className="font-medium">
+                  {SIGNAL_LABELS[source.signal] ?? source.signal}: {amount(source.current, "SEK")} mot {amount(source.previous, "SEK")}
+                  {source.change != null && <span className="text-muted"> ({amount(source.change, "SEK", true)})</span>}
+                </p>
+              )}
               <p>Konton: {source.accounts || "Inga konton angivna"}</p>
               {source.references && source.references.length > 0 ? (
                 <ul className="mt-1 space-y-1">
