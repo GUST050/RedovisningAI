@@ -5,6 +5,7 @@ from redovisningai.accounting.balances import LedgerIndex
 from redovisningai.accounting.comparisons import ComparisonPair
 from redovisningai.accounting.periods import month
 from redovisningai.accounting.transaction_bridge import TransactionBridge, transaction_bridge
+from redovisningai.accounting.variance import drilldown
 from redovisningai.domain.ledger import Account, FiscalYear, Ledger, Row, Voucher, YearData
 from redovisningai.facts.model import FactStatus, FactStore
 
@@ -114,3 +115,56 @@ def test_reversals_and_large_bookings_are_signals_not_extra_amounts() -> None:
     }
     assert "large_booking" in groups["Leverantör A"].signals
     assert {"reversal", "periodization"} <= groups["Konsult"].signals
+
+
+def test_large_booking_is_judged_per_account_not_per_target_basket() -> None:
+    # En resultatrad eller kategori kan omfatta flera konton. 6 000 på 5010 och 6 000 på 5020 i
+    # samma verifikation är inte en enskild bokning på 12 000 – varje konto bedöms för sig. Ett
+    # konto som på egen hand går över tröskeln (25 % och minst 10 000 kr) flaggas ändå.
+    vouchers = [
+        Voucher(
+            "A",
+            "1",
+            date(2026, 9, 10),
+            "Diverse",
+            (Row(5010, Decimal("6000")), Row(5020, Decimal("6000")), Row(1930, Decimal("-12000"))),
+        ),
+        Voucher(
+            "A",
+            "2",
+            date(2026, 9, 20),
+            "Stor faktura",
+            (Row(5010, Decimal("20000")), Row(1930, Decimal("-20000"))),
+        ),
+    ]
+    index = _index(vouchers)
+
+    bridge = transaction_bridge(
+        index, {5010, 5020}, PAIR, target="line:other_external", aliases={}, sign=1, store=FactStore()
+    )
+
+    assert bridge.signals == {"large_booking": Decimal("20000")}
+
+
+def test_bridge_facts_never_collide_with_drilldown_facts_for_the_same_account() -> None:
+    # Task 14 lägger bryggfakta i samma faktalager som granskningens övriga fakta. Ett kind="change"
+    # på samma ämne (kontot), period och jämförelseperiod som drilldown skapar måste inte få samma
+    # id, annars skriver FactStore.add tyst över det.
+    vouchers = [
+        _v("1", date(2025, 9, 5), "1000", "Leverantör A"),
+        _v("2", date(2026, 9, 4), "1100", "Leverantör A"),
+    ]
+    index = _index(vouchers)
+    store = FactStore()
+    dd = drilldown(index, {6110}, PAIR.current, PAIR.previous, store=store, sign=1)
+    account_change = next(a for a in dd.accounts if a.account == 6110)
+    before = {f.id: f.value for f in store}
+
+    bridge = transaction_bridge(index, {6110}, PAIR, target="account:6110", aliases={}, sign=1, store=store)
+
+    assert account_change.fact_id is not None
+    assert bridge.change_fact_id != account_change.fact_id
+    for fact_id, value in before.items():
+        after = store.get(fact_id)
+        assert after is not None
+        assert after.value == value

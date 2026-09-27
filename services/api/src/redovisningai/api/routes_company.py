@@ -22,10 +22,11 @@ from redovisningai.accounting.metric_evidence import evidence_for_component
 from redovisningai.accounting.metric_explanations import explain_metric
 from redovisningai.accounting.metrics import REGISTRY
 from redovisningai.accounting.periods import same_period_previous_year
+from redovisningai.accounting.statements import INCOME_LINES
 from redovisningai.accounting.transaction_bridge import transaction_bridge
 from redovisningai.ai.egress import EgressGuard
 from redovisningai.analytics.budget import budget_vs_actual
-from redovisningai.analytics.finding_candidates import FindingCandidate, collect_candidates
+from redovisningai.analytics.finding_candidates import RESULT_ACCOUNTS, FindingCandidate, collect_candidates
 from redovisningai.analytics.spend import spend_report
 from redovisningai.analytics.tax_account import parse_tax_account_csv, reconcile_tax_account
 from redovisningai.api.deps import (
@@ -377,22 +378,47 @@ def _bridge_target(analysis: CompanyAnalysis, code: str) -> str | None:
     return target
 
 
-def _finding_bridge_target(candidate: FindingCandidate) -> str | None:
-    """`account:<nr>` för det första icke-lönekontot i fyndets källor, annars `None`."""
+def _finding_accounts(candidate: FindingCandidate) -> set[int]:
+    """Alla distinkta kontonummer i fyndets källor. Enda stället som läser `source["accounts"]`."""
+    accounts: set[int] = set()
     for source in candidate.sources:
         account_list = source.get("accounts")
         if not isinstance(account_list, str):
             continue
-        for account in account_list.split(","):
-            if not account:
-                continue
-            number = int(account)
-            if number not in PAYROLL:
-                return f"account:{number}"
-    return None
+        accounts.update(int(account) for account in account_list.split(",") if account)
+    return accounts
 
 
-def _candidate_dict(candidate: FindingCandidate) -> dict[str, Any]:
+def _finding_bridge_target(analysis: CompanyAnalysis, candidate: FindingCandidate) -> str | None:
+    """Bryggmål för ett fynd: ett resultatkonto ger `account:<nr>`, flera på samma resultatrad ger
+    `line:<kod>`, annars `None`. Lönekonton tas inte bort här – rutten maskerar bryggan i stället."""
+    result_accounts = {account for account in _finding_accounts(candidate) if account in RESULT_ACCOUNTS}
+    if not result_accounts:
+        return None
+    if len(result_accounts) == 1:
+        target = f"account:{next(iter(result_accounts))}"
+        try:
+            analysis.target_accounts(target)
+        except (ValueError, KeyError):
+            return None
+        return target
+    lines = [
+        line.code
+        for line in INCOME_LINES
+        if line.accounts is not None and _line_covers(analysis, line.code, result_accounts)
+    ]
+    return f"line:{lines[0]}" if len(lines) == 1 else None
+
+
+def _line_covers(analysis: CompanyAnalysis, code: str, accounts: set[int]) -> bool:
+    try:
+        line_accounts, _ = analysis.target_accounts(f"line:{code}")
+    except (ValueError, KeyError):
+        return False
+    return accounts <= line_accounts
+
+
+def _candidate_dict(analysis: CompanyAnalysis, candidate: FindingCandidate) -> dict[str, Any]:
     return {
         "code": candidate.code,
         "label": candidate.label,
@@ -409,18 +435,12 @@ def _candidate_dict(candidate: FindingCandidate) -> dict[str, Any]:
         "priority_score": candidate.priority_score,
         "score_parts": candidate.score_parts,
         "demotion_reasons": list(candidate.demotion_reasons),
-        "bridge_target": _finding_bridge_target(candidate),
+        "bridge_target": _finding_bridge_target(analysis, candidate),
     }
 
 
 def _has_payroll_accounts(candidate: FindingCandidate) -> bool:
-    for source in candidate.sources:
-        account_list = source.get("accounts")
-        if isinstance(account_list, str) and any(
-            int(account) in PAYROLL for account in account_list.split(",") if account
-        ):
-            return True
-    return False
+    return any(account in PAYROLL for account in _finding_accounts(candidate))
 
 
 @router.get("/analysis-findings")
@@ -462,8 +482,8 @@ def analysis_findings(
         "periods": {"current": pair.current.spec, "previous": pair.previous.spec},
         "status": pair.status.value,
         "warnings": list(pair.warnings),
-        "top": [_candidate_dict(candidate) for candidate in ranked.top],
-        "others": [_candidate_dict(candidate) for candidate in ranked.others],
+        "top": [_candidate_dict(analysis, candidate) for candidate in ranked.top],
+        "others": [_candidate_dict(analysis, candidate) for candidate in ranked.others],
         "count": len(candidates),
     }
 
@@ -533,6 +553,7 @@ def transaction_bridge_route(
         current = _period(a, period)
         pair = comparison_pair(current, mode, a.ledger, a.index)
         accounts, sign = a.target_accounts(target)
+        _validate_bridge_target(a, target, accounts)
     except (ValueError, KeyError) as exc:
         raise HTTPException(422, f"Okänt mål eller period: {target}") from exc
     bridge = transaction_bridge(
@@ -541,9 +562,37 @@ def transaction_bridge_route(
     payload = bridge.to_dict()
     masked = any(account in PAYROLL for account in accounts) and not principal.can_payroll
     if masked:
-        payload["groups"] = []
+        _mask_bridge_payload(payload)
     payload["masked"] = masked
     return payload
+
+
+def _validate_bridge_target(analysis: CompanyAnalysis, target: str, accounts: set[int]) -> None:
+    """`target_accounts` godtar syntaktiskt giltiga men okända mål utan fel (t.ex. en okänd
+    kategori eller ett konto som inte förekommer i kontoplanen eller bokföringen); det ger en
+    brygga full av nollor i stället för 422. Kontrollera det som `target_accounts` inte gör."""
+    kind, _, code = target.partition(":")
+    if kind == "category" and code not in {c.code for c in analysis.ctx.category_mapping.categories}:
+        raise KeyError(f"Okänd kategori: {code}")
+    if kind == "account" and not accounts & (set(analysis.ledger.accounts) | analysis.index.accounts_used):
+        raise KeyError(f"Okänt konto: {code}")
+
+
+def _mask_bridge_payload(payload: dict[str, Any]) -> None:
+    """En lönebrygga visar bara förändringen och delarnas koder – aldrig belopp, antal eller
+    signaler, som tillsammans kan avslöja en enskild persons lön. `change`/`change_fact_id` och
+    delarnas `code` behålls."""
+    payload["groups"] = []
+    payload["signals"] = {}
+    payload["identified_share_abs"] = None
+    for part in payload["parts"]:
+        part["current"] = None
+        part["previous"] = None
+        part["effect"] = None
+        part["current_count"] = None
+        part["previous_count"] = None
+        part["count_effect"] = None
+        part["amount_effect"] = None
 
 
 @router.get("/maturity")

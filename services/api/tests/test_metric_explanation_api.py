@@ -154,8 +154,61 @@ def test_transaction_bridge_api_reconciles_and_hides_payroll_groups(monkeypatch)
     body = costs.json()
     assert sum(Decimal(p["effect"]) for p in body["parts"]) == Decimal(body["change"])
     assert any(g["name"] == "Staples" for g in body["groups"])
-    assert payroll.json()["masked"] is True and payroll.json()["groups"] == []
+    payroll_body = payroll.json()
+    assert payroll_body["masked"] is True
+    assert payroll_body["groups"] == []
+    assert payroll_body["signals"] == {}
+    assert payroll_body["identified_share_abs"] is None
+    assert payroll_body["change"] is not None  # förändringen visas ändå, bara motparterna döljs
+    for part in payroll_body["parts"]:
+        assert part["current"] is None
+        assert part["previous"] is None
+        assert part["effect"] is None
+        assert part["current_count"] is None
+        assert part["previous_count"] is None
+        assert part["count_effect"] is None
+        assert part["amount_effect"] is None
     assert client.get(url, params={"target": "account:abc", "period": "2026-09"}).status_code == 422
+    assert client.get(url, params={"target": "category:bogus", "period": "2026-09"}).status_code == 422
+    assert client.get(url, params={"target": "account:999999", "period": "2026-09"}).status_code == 422
+
+
+def test_finding_bridge_targets_match_the_finding_amount_in_magnitude(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Ett fynds bryggmål (ett resultatkonto eller flera på samma rad) förklarar exakt det fyndet;
+    fynd som spänner över flera rader (t.ex. margin_pressure) får inget mål och skippas här."""
+    client, company_id = _client(monkeypatch)
+    bridge_url = f"/api/companies/{company_id}/transaction-bridge"
+
+    findings = client.get(f"/api/companies/{company_id}/analysis-findings?period=2026-09&mode=yoy")
+    assert findings.status_code == 200
+    items = findings.json()["top"] + findings.json()["others"]
+    checked = 0
+    for item in items:
+        target = item["bridge_target"]
+        if target is None:
+            continue
+        bridge = client.get(bridge_url, params={"target": target, "period": "2026-09", "mode": "yoy"})
+        assert bridge.status_code == 200
+        assert abs(Decimal(bridge.json()["change"])) == abs(Decimal(item["amount_effect"]))
+        checked += 1
+    assert checked > 0  # underlaget faktiskt prövat, inte bara tomma listor
+
+
+def test_finding_bridge_target_reaches_payroll_accounts_for_a_payroll_user(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Icke-lönekonton filtreras inte bort ur bryggmålet; en lönebehörig konsult ska kunna öppna
+    bryggan för ett lönefynd (rutten maskerar den ändå för användare utan behörigheten)."""
+    client, company_id = _client(monkeypatch, can_payroll=True)
+
+    findings = client.get(f"/api/companies/{company_id}/analysis-findings?period=2026-09&mode=yoy")
+    assert findings.status_code == 200
+    items = findings.json()["top"] + findings.json()["others"]
+    payroll_items = [
+        item
+        for item in items
+        if any(int(a) in PAYROLL for source in item["sources"] for a in source["accounts"].split(",") if a)
+    ]
+    assert payroll_items
+    assert any(item["bridge_target"] is not None for item in payroll_items)
 
 
 def _reused_number_ledger() -> Ledger:

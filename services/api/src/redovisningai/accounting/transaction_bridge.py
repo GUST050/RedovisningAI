@@ -181,7 +181,7 @@ def transaction_bridge(
         "current": _target_rows(index, pair.current, accounts),
         "previous": _target_rows(index, pair.previous, accounts),
     }
-    abs_totals = {label: sum((abs(row.amount) for _, row in rows), ZERO) for label, rows in rows_by_period.items()}
+    abs_totals_by_account = {label: _abs_by_account(rows) for label, rows in rows_by_period.items()}
 
     groups: dict[str, _GroupAcc] = {}
     signal_totals: dict[str, Decimal] = {}
@@ -189,9 +189,15 @@ def transaction_bridge(
 
     for label, rows in rows_by_period.items():
         for ident, (voucher, voucher_rows) in _by_voucher(rows).items():
-            net = sum((r.amount for r in voucher_rows), ZERO) * sign
+            net_by_account = _net_by_account(voucher_rows, sign)
             signals = _voucher_signals(
-                voucher, ident, net, abs_totals[label], reversal_ids, large_booking_share, large_booking_min
+                voucher,
+                ident,
+                net_by_account,
+                abs_totals_by_account[label],
+                reversal_ids,
+                large_booking_share,
+                large_booking_min,
             )
             for row in voucher_rows:
                 guess, source = _group_guess(voucher, row, aliases)
@@ -228,6 +234,7 @@ def transaction_bridge(
         )
     group_lines.sort(key=lambda g: abs(g.current - g.previous), reverse=True)
 
+    fact_extra = _bridge_fact_extra(target)
     parts = tuple(_build_part(code, part_members[code], pair, target, store) for code in PART_CODES)
     change = sum((p.effect for p in parts), ZERO)
     change_fact = store.new(
@@ -238,6 +245,7 @@ def transaction_bridge(
         Unit.SEK,
         period=pair.current.spec,
         compare_period=pair.previous.spec,
+        extra=fact_extra,
     )
 
     total_abs = sum(identified_abs.values(), ZERO)
@@ -255,6 +263,7 @@ def transaction_bridge(
         period=pair.current.spec,
         compare_period=pair.previous.spec,
         visibility=Visibility.INTERNAL,
+        extra=fact_extra,
     )
 
     return TransactionBridge(
@@ -272,6 +281,23 @@ def transaction_bridge(
 
 def _target_rows(index: LedgerIndex, period: Period, accounts: set[int]) -> list[tuple[Voucher, Row]]:
     return [(v, r) for v in index.vouchers_in(period) for r in v.effective_rows if r.account in accounts]
+
+
+def _abs_by_account(rows: list[tuple[Voucher, Row]]) -> dict[int, Decimal]:
+    """Periodens absoluta belopp per konto – stor enskild bokning bedöms konto för konto, aldrig
+    mot en korg av flera konton (en resultatrad eller kategori kan omfatta flera)."""
+    totals: dict[int, Decimal] = {}
+    for _, row in rows:
+        totals[row.account] = totals.get(row.account, ZERO) + abs(row.amount)
+    return totals
+
+
+def _net_by_account(rows: list[Row], sign: int) -> dict[int, Decimal]:
+    """En verifikations nettobelopp per konto bland dess rader på målets konton."""
+    totals: dict[int, Decimal] = {}
+    for row in rows:
+        totals[row.account] = totals.get(row.account, ZERO) + row.amount * sign
+    return totals
 
 
 def _by_voucher(rows: list[tuple[Voucher, Row]]) -> dict[VoucherIdentity, tuple[Voucher, list[Row]]]:
@@ -298,8 +324,8 @@ def _group_guess(voucher: Voucher, row: Row, aliases: dict[str, str]) -> tuple[C
 def _voucher_signals(
     voucher: Voucher,
     ident: VoucherIdentity,
-    net: Decimal,
-    period_abs_total: Decimal,
+    net_by_account: dict[int, Decimal],
+    period_abs_by_account: dict[int, Decimal],
     reversal_ids: set[VoucherIdentity],
     large_booking_share: Decimal,
     large_booking_min: Decimal,
@@ -309,8 +335,11 @@ def _voucher_signals(
         signals.add("periodization")
     if ident in reversal_ids:
         signals.add("reversal")
-    if abs(net) >= large_booking_share * period_abs_total and abs(net) >= large_booking_min:
-        signals.add("large_booking")
+    for account, net in net_by_account.items():
+        period_abs_total = period_abs_by_account.get(account, ZERO)
+        if abs(net) >= large_booking_share * period_abs_total and abs(net) >= large_booking_min:
+            signals.add("large_booking")
+            break
     return signals
 
 
@@ -336,6 +365,12 @@ def _top_vouchers(vouchers: dict[VoucherIdentity, tuple[Voucher, Decimal]]) -> t
     return tuple((str(voucher.key), voucher.date.isoformat()) for voucher, _ in ranked[:MAX_GROUP_VOUCHERS])
 
 
+def _bridge_fact_extra(target: str) -> str:
+    """Egen extra-sträng för varje bryggfakta, så inget id kan sammanfalla med `drilldown`,
+    nyckeltalsförklaringar eller en annan brygga – även när kind, ämne och perioder råkar stämma."""
+    return f"transaction-bridge:{target}"
+
+
 def _group_fact(store: FactStore, acc: _GroupAcc, part: str, pair: ComparisonPair, target: str) -> Fact:
     subject = counterparty_subject(acc.key) if acc.key else "counterparty:unknown"
     label = f"Motpart: {acc.name}" if acc.name else "Okänd motpart"
@@ -349,7 +384,7 @@ def _group_fact(store: FactStore, acc: _GroupAcc, part: str, pair: ComparisonPai
         compare_period=pair.previous.spec,
         lineage={"current": str(acc.current), "previous": str(acc.previous), "part": part},
         visibility=Visibility.INTERNAL,
-        extra=target,
+        extra=_bridge_fact_extra(target),
     )
 
 
@@ -363,6 +398,7 @@ def _build_part(code: str, members: list[_GroupAcc], pair: ComparisonPair, targe
     amount_effect: Decimal | None = None
     count_fact_id: str | None = None
     amount_fact_id: str | None = None
+    fact_extra = _bridge_fact_extra(target)
     if code == "both":
         count_effect, amount_effect = _both_effects(members)
         count_fact = store.new(
@@ -373,6 +409,7 @@ def _build_part(code: str, members: list[_GroupAcc], pair: ComparisonPair, targe
             Unit.SEK,
             period=pair.current.spec,
             compare_period=pair.previous.spec,
+            extra=fact_extra,
         )
         amount_fact = store.new(
             "amount_effect",
@@ -382,6 +419,7 @@ def _build_part(code: str, members: list[_GroupAcc], pair: ComparisonPair, targe
             Unit.SEK,
             period=pair.current.spec,
             compare_period=pair.previous.spec,
+            extra=fact_extra,
         )
         count_fact_id, amount_fact_id = count_fact.id, amount_fact.id
     part_fact = store.new(
@@ -392,6 +430,7 @@ def _build_part(code: str, members: list[_GroupAcc], pair: ComparisonPair, targe
         Unit.SEK,
         period=pair.current.spec,
         compare_period=pair.previous.spec,
+        extra=fact_extra,
     )
     return BridgePart(
         code=code,

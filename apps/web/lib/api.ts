@@ -208,11 +208,12 @@ export type BridgePartCode = "both" | "current_only" | "previous_only" | "unknow
 export type BridgeSignal = "periodization" | "reversal" | "large_booking";
 export interface BridgePart {
   code: BridgePartCode;
-  current: string;
-  previous: string;
-  effect: string;
-  current_count: number;
-  previous_count: number;
+  // Maskade lönebryggor sätter belopp, antal och effekter till `null`; bara `code` behålls.
+  current: string | null;
+  previous: string | null;
+  effect: string | null;
+  current_count: number | null;
+  previous_count: number | null;
   count_effect: string | null;
   amount_effect: string | null;
   fact_id: string;
@@ -237,7 +238,8 @@ export interface TransactionBridge {
   change_fact_id: string;
   parts: BridgePart[];
   groups: BridgeGroup[];
-  identified_share_abs: Record<"alias" | "row_text" | "voucher_text" | "unknown", string>;
+  // `null` för en maskad lönebrygga.
+  identified_share_abs: Record<"alias" | "row_text" | "voucher_text" | "unknown", string> | null;
   signals: Partial<Record<BridgeSignal, string>>;
   versions: Record<string, string>;
   masked: boolean;

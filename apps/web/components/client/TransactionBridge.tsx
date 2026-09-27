@@ -28,6 +28,31 @@ const SOURCE_LABELS: Record<string, string> = {
   unknown: "oidentifierat",
 };
 
+// Rader utan egna konton (summeringsrader) blir aldrig ett bryggmål, så bara bladraderna listas här.
+const LINE_LABELS: Record<string, string> = {
+  net_sales: "Nettoomsättning",
+  inventory_change: "Förändring av lager",
+  capitalized_work: "Aktiverat arbete för egen räkning",
+  other_operating_income: "Övriga rörelseintäkter",
+  materials: "Råvaror, förnödenheter och handelsvaror",
+  other_external: "Övriga externa kostnader",
+  personnel: "Personalkostnader",
+  depreciation: "Av- och nedskrivningar",
+  other_operating_expenses: "Övriga rörelsekostnader",
+  financial_assets_result: "Resultat från finansiella anläggningstillgångar",
+  interest_income: "Övriga ränteintäkter",
+  interest_expense: "Räntekostnader",
+};
+
+/** Läsbar etikett för ett bryggmål ("account:6110" → "Konto 6110"), så rubriken visar vad som förklaras. */
+function targetLabel(target: string): string {
+  const [kind, code] = target.split(":", 2);
+  if (kind === "account") return `Konto ${code}`;
+  if (kind === "line") return LINE_LABELS[code] ?? code;
+  if (kind === "category") return `Kategori ${code}`;
+  return target;
+}
+
 /** Knapp som utan förhandsladdning expanderar transaktionsbryggan för ett mål. */
 export function TransactionBridgeToggle({
   base,
@@ -69,11 +94,26 @@ function TransactionBridgePanel({ base, target, period, mode }: { base: string; 
 }
 
 function BridgeTable({ bridge }: { bridge: TransactionBridge }) {
-  const both = bridge.parts.find((p) => p.code === "both");
-  const topGroups = bridge.groups.slice(0, 5);
   return (
     <div className="space-y-3 text-[12px]">
-      <h4 className="font-semibold">Transaktionsbrygga</h4>
+      <h4 className="font-semibold">Transaktionsbrygga: {targetLabel(bridge.target)}</h4>
+      <p className="text-[13px] font-medium">Förändring: {sek(bridge.change, { signed: true })}</p>
+      {bridge.masked ? (
+        <p className="text-muted">Motparter på lönekonton visas bara med behörigheten Lönedata.</p>
+      ) : (
+        <BridgeDetails bridge={bridge} />
+      )}
+    </div>
+  );
+}
+
+/** Delarnas tabell, identifieringsgrad, signaler och största motparter – bara för en omaskad brygga. */
+function BridgeDetails({ bridge }: { bridge: TransactionBridge }) {
+  const both = bridge.parts.find((p) => p.code === "both");
+  const topGroups = bridge.groups.slice(0, 5);
+  const shares = bridge.identified_share_abs;
+  return (
+    <div className="space-y-3">
       <div className="overflow-x-auto">
         <table className="data min-w-[560px]">
           <thead>
@@ -91,13 +131,6 @@ function BridgeTable({ bridge }: { bridge: TransactionBridge }) {
               <PartRows key={part.code} part={part} />
             ))}
           </tbody>
-          <tfoot>
-            <tr>
-              <th>Förändring</th>
-              <td colSpan={4} />
-              <td className="num">{sek(bridge.change, { signed: true })}</td>
-            </tr>
-          </tfoot>
         </table>
       </div>
       {both && (both.count_effect !== null || both.amount_effect !== null) && (
@@ -106,12 +139,14 @@ function BridgeTable({ bridge }: { bridge: TransactionBridge }) {
           verifikation: {sek(both.amount_effect, { signed: true })}.
         </p>
       )}
-      <p>
-        Identifieringsgrad:{" "}
-        {(["alias", "row_text", "voucher_text", "unknown"] as const)
-          .map((key) => `${SOURCE_LABELS[key]} ${pct(Number(bridge.identified_share_abs[key]) * 100, false)}`)
-          .join(" · ")}
-      </p>
+      {shares && (
+        <p>
+          Identifieringsgrad:{" "}
+          {(["alias", "row_text", "voucher_text", "unknown"] as const)
+            .map((key) => `${SOURCE_LABELS[key]} ${pct(Number(shares[key]) * 100, false)}`)
+            .join(" · ")}
+        </p>
+      )}
       {Object.keys(bridge.signals).length > 0 && (
         <div className="flex flex-wrap gap-2">
           {Object.entries(bridge.signals).map(([signal, amount]) => (
@@ -121,19 +156,15 @@ function BridgeTable({ bridge }: { bridge: TransactionBridge }) {
           ))}
         </div>
       )}
-      {bridge.masked ? (
-        <p className="text-muted">Motparter på lönekonton visas bara med behörigheten Lönedata.</p>
-      ) : (
-        topGroups.length > 0 && (
-          <div className="space-y-2">
-            <h5 className="font-semibold">Största motparter</h5>
-            <ul className="space-y-1">
-              {topGroups.map((group) => (
-                <GroupRow key={group.key || "unknown"} group={group} />
-              ))}
-            </ul>
-          </div>
-        )
+      {topGroups.length > 0 && (
+        <div className="space-y-2">
+          <h5 className="font-semibold">Största motparter</h5>
+          <ul className="space-y-1">
+            {topGroups.map((group) => (
+              <GroupRow key={group.key || "unknown"} group={group} />
+            ))}
+          </ul>
+        </div>
       )}
     </div>
   );
