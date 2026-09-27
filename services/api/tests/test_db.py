@@ -186,6 +186,54 @@ def test_import_versioning_and_duplicate(world) -> None:  # type: ignore[no-unty
             assert a.content_hash() == b.content_hash()
 
 
+def _shared_number_sie(extra: bool = False) -> bytes:
+    lines = [
+        "#FLAGGA 0",
+        "#FORMAT PC8",
+        "#SIETYP 4",
+        '#FNAMN "Nummerbolaget AB"',
+        "#ORGNR 556000-0004",
+        "#RAR 0 20230101 20231231",
+        '#KONTO 1930 "Bank"',
+        '#KONTO 6110 "Kontorsmateriel"',
+    ]
+    vouchers = [("300009938", "20230105", 100), ("300009938", "20230106", 200), ("300009938", "20230106", 300)]
+    vouchers += [("300009939", "20230107", 50)] + ([("300009940", "20230108", 25)] if extra else [])
+    for number, day, amount in vouchers:
+        lines += [
+            f'#VER S4 {number} {day} "Bunt"',
+            "{",
+            f"#TRANS 6110 {{}} {amount}.00",
+            f"#TRANS 1930 {{}} -{amount}.00",
+            "}",
+        ]
+    return ("\r\n".join(lines) + "\r\n").encode("cp437")
+
+
+def test_vouchers_that_share_a_number_are_all_kept(world) -> None:  # type: ignore[no-untyped-def]
+    """Vissa system återanvänder verifikationsnummer (t.ex. per dag eller bunt). En verklig export hade
+    23 919 verifikationer men bara 8 188 unika nummer – importen sparade tyst bara en per nummer."""
+    from decimal import Decimal
+
+    company = create_company(world["admin_a"], "Nummerbolaget AB", "556000-0004")
+
+    first = import_sie(world["admin_a"], company, "bunt.se", _shared_number_sie(), run_review=False)
+    second = import_sie(world["admin_a"], company, "bunt-2.se", _shared_number_sie(extra=True), run_review=False)
+
+    assert (first.stats["vouchers"], first.stats["added"]) == (4, 4)
+    assert (second.stats["added"], second.stats["unchanged"], second.stats["removed"]) == (1, 4, 0)
+    with tenant_session(TenantContext.worker(world["a"].org_id)) as s:
+        ledger, _ = repo.load_ledger(s, s.get(m.Company, company))
+        runs = s.scalars(select(m.ImportRun).where(m.ImportRun.company_id == company).order_by(m.ImportRun.seq)).all()
+        changes = repo.voucher_changes(
+            s, company, runs[0].fiscal_year_id, runs[0].seq, runs[1].seq, date(2023, 1, 1), date(2023, 1, 31)
+        )
+    assert len(ledger.current.vouchers) == 5
+    booked = sum(r.amount for v in ledger.current.vouchers for r in v.effective_rows if r.account == 6110)
+    assert booked == Decimal("675")
+    assert [(c["voucher"], c["kind"]) for c in changes] == [("S4300009940", "ADDED")]
+
+
 def test_orgnr_mismatch_rejected(world) -> None:  # type: ignore[no-untyped-def]
     g = generate(DEMO_PROFILES[1], date(2026, 9, 30))
     with pytest.raises(ImportError_):

@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import uuid
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, TypeVar
 
 from sqlalchemy import and_, func, insert, or_, select
 from sqlalchemy.orm import Session
@@ -35,6 +35,8 @@ from redovisningai.review.analysis import CompanyContext
 from redovisningai.rules.engine import CompanySettings, Severity
 from redovisningai.sie.convert import document_years
 from redovisningai.sie.parser import PARSER_VERSION, SieDocument
+
+T = TypeVar("T")
 
 # ---------------------------------------------------------------------------- revisionslogg
 
@@ -156,8 +158,32 @@ def _next_seq(session: Session, company_id: uuid.UUID) -> int:
     return (cur or 0) + 1
 
 
-def _voucher_key(series: str, number: str, content_hash: str) -> tuple[str, str]:
-    return (series, number or f"h:{content_hash[:16]}")
+VoucherIdentity = tuple[str, ...]
+
+
+def _voucher_number(v: Voucher) -> str:
+    """Verifikationsnummer som sparas; verifikationer utan nummer får ett innehållsbaserat."""
+    return v.number or f"h:{v.content_hash()[:16]}"
+
+
+def _identities(entries: list[tuple[str, str, date, tuple[int, int], T]]) -> dict[VoucherIdentity, T]:
+    """Verifikationens identitet mellan importer: serie och nummer. Vissa system återanvänder nummer
+    (t.ex. per dag eller bunt); då läggs datum och ordning i filen till, så att ingen verifikation
+    skriver över en annan. Posterna är (serie, nummer, datum, ordning, objekt)."""
+    shared = Counter((series, number) for series, number, _, _, _ in entries)
+    seen: Counter[tuple[str, str, date]] = Counter()
+    out: dict[VoucherIdentity, T] = {}
+    for series, number, day, _, item in sorted(entries, key=lambda entry: entry[3]):
+        if shared[(series, number)] == 1:
+            out[(series, number)] = item
+            continue
+        seen[(series, number, day)] += 1
+        out[(series, number, day.isoformat(), str(seen[(series, number, day)]))] = item
+    return out
+
+
+def _version_identities(versions: list[m.VoucherVersion]) -> dict[VoucherIdentity, m.VoucherVersion]:
+    return _identities([(v.series, v.number, v.date, (v.source_line or 0, v.id), v) for v in versions])
 
 
 def persist_document(
@@ -225,19 +251,20 @@ def persist_document(
         outcome.fiscal_years.append((yd.fiscal_year.start, yd.fiscal_year.end))
         stats = {"vouchers": len(yd.vouchers), "added": 0, "changed": 0, "removed": 0, "unchanged": 0}
         if yd.has_vouchers:
-            current = {
-                (v.series, v.number): v
-                for v in session.scalars(
-                    select(m.VoucherVersion).where(
-                        m.VoucherVersion.company_id == company_id,
-                        m.VoucherVersion.fiscal_year_id == fy_row.id,
-                        m.VoucherVersion.valid_to.is_(None),
-                    )
-                ).all()
-            }
-            incoming: dict[tuple[str, str], Voucher] = {}
-            for v in yd.vouchers:
-                incoming[_voucher_key(v.series, v.number, v.content_hash())] = v
+            current = _version_identities(
+                list(
+                    session.scalars(
+                        select(m.VoucherVersion).where(
+                            m.VoucherVersion.company_id == company_id,
+                            m.VoucherVersion.fiscal_year_id == fy_row.id,
+                            m.VoucherVersion.valid_to.is_(None),
+                        )
+                    ).all()
+                )
+            )
+            incoming = _identities(
+                [(v.series, _voucher_number(v), v.date, (v.source_line or 0, i), v) for i, v in enumerate(yd.vouchers)]
+            )
             new_versions: list[tuple[m.VoucherVersion, Voucher]] = []
             for key, v in incoming.items():
                 h = v.content_hash()
@@ -256,8 +283,8 @@ def persist_document(
                     org_id=ctx.org_id,
                     company_id=company_id,
                     fiscal_year_id=fy_row.id,
-                    series=key[0],
-                    number=key[1],
+                    series=v.series,
+                    number=_voucher_number(v),
                     date=v.date,
                     text=v.text,
                     reg_date=v.reg_date,
@@ -488,8 +515,8 @@ def voucher_changes(
     base = select(m.VoucherVersion).where(
         m.VoucherVersion.company_id == company_id, m.VoucherVersion.fiscal_year_id == fy_id
     )
-    before = {(v.series, v.number): v for v in session.scalars(base.where(valid_at(from_seq))).all()}
-    after = {(v.series, v.number): v for v in session.scalars(base.where(valid_at(to_seq))).all()}
+    before = _version_identities(list(session.scalars(base.where(valid_at(from_seq))).all()))
+    after = _version_identities(list(session.scalars(base.where(valid_at(to_seq))).all()))
     changes = []
     for key in sorted(set(before) | set(after)):
         b, a = before.get(key), after.get(key)
