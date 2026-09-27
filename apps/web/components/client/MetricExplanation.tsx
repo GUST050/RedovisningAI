@@ -18,12 +18,19 @@ const STATUS: Record<string, string> = {
 
 // Signaler i kombinationsfynd (t.ex. samtidigt lägre omsättning och högre kostnader).
 const SIGNAL_LABELS: Record<string, string> = { net_sales: "Nettoomsättning", operating_costs: "Rörelsekostnader" };
+// Evidensnivå per fynd, i klartext.
+const SOURCE_LEVEL_SV: Record<string, string> = {
+  account_voucher: "konto och verifikationer",
+  account: "konto",
+  parameter: "beräkningsparameter",
+};
 
 function amount(value: string | null, unit: string, signed = false, isChange = false) {
   if (value === null) return "–";
   if (unit === "SEK") return sek(value, { signed });
-  if (unit === "percent") return isChange ? `${pct(value, signed)} p.e.` : pct(value, signed);
-  if (unit === "pp") return `${pct(value, signed)}${isChange ? " p.e." : ""}`;
+  // En förändring i ett procenttal är procentenheter (p.e.), inte procent: "+19,3 p.e.", aldrig "+19,3 % p.e.".
+  if (unit === "pp" || (unit === "percent" && isChange)) return pct(value, signed).replace(" %", " p.e.");
+  if (unit === "percent") return pct(value, signed);
   return value;
 }
 
@@ -150,11 +157,13 @@ function FindingRow({ item, metrics, onSelectMetric }: { item: AnalysisFinding; 
       <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
       <div>
         <button type="button" aria-expanded={expanded} onClick={() => setExpanded(!expanded)} className="focus-ring text-left font-medium text-brand hover:underline">{item.label}</button>
-        <div className="text-[11px] text-muted">Nyckeltal: {item.metric_codes.join(", ")} · evidens: {item.source_level} · prioritet {item.priority_score}</div>
+        <div className="text-[11px] text-muted">
+          Nyckeltal: {item.metric_codes.map((code) => metrics[code]?.label ?? code).join(", ") || "–"} · evidens: {SOURCE_LEVEL_SV[item.source_level] ?? item.source_level} · prioritet {item.priority_score}
+        </div>
         {item.warnings.map((warning, i) => <div key={`${i}-${warning}`} className="text-[11px] text-medium">{warning}</div>)}
         {item.demotion_reasons.map((reason, i) => <div key={`${i}-${reason}`} className="text-[11px] text-muted">{reason}</div>)}
       </div>
-      <span className="whitespace-nowrap text-[12px] tabular-nums">{amount(item.amount_effect, item.unit, true)}</span>
+      <span className="whitespace-nowrap text-[12px] tabular-nums">{amount(item.amount_effect, item.unit, true, true)}</span>
       </div>
       {expanded && (
         <div className="mt-3 space-y-2 border-t border-line pt-3 text-[12px]">

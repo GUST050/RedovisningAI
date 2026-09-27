@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode, useEffect } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
 import { SEVERITY_SV, STATUS_SV } from "@/lib/format";
 
 export function cx(...parts: (string | false | null | undefined)[]) {
@@ -11,12 +11,13 @@ export function Card({ title, actions, children, className }: { title?: ReactNod
   return (
     <section className={cx("rounded-lg border border-line bg-panel", className)}>
       {(title || actions) && (
-        <header className="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
+        <header className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3">
           <h2 className="text-[15px] font-semibold">{title}</h2>
-          <div className="flex items-center gap-2">{actions}</div>
+          <div className="flex flex-wrap items-center gap-2">{actions}</div>
         </header>
       )}
-      <div className="p-4">{children}</div>
+      {/* Smala skärmar: breda tabeller scrollar inom kortet i stället för att bredda sidan. */}
+      <div className="overflow-x-auto p-4 lg:overflow-visible">{children}</div>
     </section>
   );
 }
@@ -133,16 +134,54 @@ export function Tabs({ tabs, active, onChange }: { tabs: { id: string; label: st
   );
 }
 
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+// Håll Tab inom dialogen: från sista elementet till första och tvärtom (modal dialog, WCAG 2.4.3).
+function trapFocus(e: KeyboardEvent, root: HTMLElement | null) {
+  if (!root) return;
+  const items = Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE));
+  const active = document.activeElement;
+  if (items.length === 0) {
+    e.preventDefault();
+    root.focus();
+    return;
+  }
+  const first = items[0];
+  const last = items[items.length - 1];
+  if (e.shiftKey && (active === first || active === root || !root.contains(active))) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && (active === last || !root.contains(active))) {
+    e.preventDefault();
+    first.focus();
+  }
+}
+
 export function Modal({ title, open, onClose, children, footer }: { title: string; open: boolean; onClose: () => void; children: ReactNode; footer?: ReactNode }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef(onClose);
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    closeRef.current = onClose;
   }, [onClose]);
+  useEffect(() => {
+    if (!open) return;
+    // Fokus in i dialogen när den öppnas och tillbaka till knappen som öppnade den när den stängs.
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialogRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeRef.current();
+      else if (e.key === "Tab") trapFocus(e, dialogRef.current);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      opener?.focus();
+    };
+  }, [open]);
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/30 p-6" onClick={onClose}>
-      <div role="dialog" aria-modal="true" aria-label={title} className="mt-10 w-full max-w-2xl rounded-lg bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
+      <div ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={title} className="mt-10 w-full max-w-2xl rounded-lg bg-white shadow-xl outline-none" onClick={(e) => e.stopPropagation()}>
         <header className="flex items-center justify-between border-b border-line px-5 py-3">
           <h3 className="text-[15px] font-semibold">{title}</h3>
           <button onClick={onClose} className="focus-ring rounded px-2 text-muted hover:text-ink" aria-label="Stäng">✕</button>

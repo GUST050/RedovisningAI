@@ -260,7 +260,7 @@ function MeetingCard({ d, busy, onGenerate, onSaved }: { d: PeriodDetail; busy: 
                     <p className="text-[12px]">{index + 1}. {line}</p>
                     <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                       <Field label="Beslut">
-                        <select className={cx(inputCls, "h-9")} value={draft.decision} onChange={(e) => setDecisions((old) => ({ ...old, [index]: { ...draft, decision: e.target.value as DecisionDraft["decision"] } }))}>
+                        <select aria-label={`Beslut för slutsats ${index + 1}`} className={cx(inputCls, "h-9")} value={draft.decision} onChange={(e) => setDecisions((old) => ({ ...old, [index]: { ...draft, decision: e.target.value as DecisionDraft["decision"] } }))}>
                           <option value="">Välj beslut</option>
                           <option value="approve">Godkänn</option>
                           <option value="reject">Avvisa</option>
@@ -268,7 +268,7 @@ function MeetingCard({ d, busy, onGenerate, onSaved }: { d: PeriodDetail; busy: 
                         </select>
                       </Field>
                       <Field label="Motivering">
-                        <input className={inputCls} value={draft.reason} onChange={(e) => setDecisions((old) => ({ ...old, [index]: { ...draft, reason: e.target.value } }))} />
+                        <input aria-label={`Motivering för slutsats ${index + 1}`} className={inputCls} value={draft.reason} onChange={(e) => setDecisions((old) => ({ ...old, [index]: { ...draft, reason: e.target.value } }))} />
                       </Field>
                     </div>
                     {draft.decision === "correct" && <Field label="Korrigerad slutsats"><input className={inputCls} value={draft.corrected_text} onChange={(e) => setDecisions((old) => ({ ...old, [index]: { ...draft, corrected_text: e.target.value } }))} /></Field>}

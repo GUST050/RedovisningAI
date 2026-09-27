@@ -121,7 +121,7 @@ function ClientWorkspace() {
           </div>
         </div>
         {ctx && (
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <select
               aria-label="Period"
               className={cx(inputCls, "w-36")}

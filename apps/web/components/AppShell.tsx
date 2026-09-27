@@ -25,7 +25,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <MeContext.Provider value={me}>
       <header className="border-b border-line bg-white">
-        <div className="mx-auto flex max-w-[1400px] items-center gap-6 px-5 py-3">
+        <div className="mx-auto flex max-w-[1400px] flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3 sm:px-5">
           <Link href="/" className="text-[15px] font-bold tracking-tight text-brand">RedovisningAI</Link>
           <nav className="flex gap-1">
             {nav.map((n) => (
@@ -38,7 +38,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               </Link>
             ))}
           </nav>
-          <div className="ml-auto flex items-center gap-3 text-[12px] text-muted">
+          <div className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted sm:ml-auto sm:w-auto">
             {me && (
               <>
                 <span>{me.org.name}</span>
@@ -51,7 +51,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
         </div>
       </header>
-      <main className="mx-auto max-w-[1400px] px-5 py-5">{noFirm ? <NoFirm /> : children}</main>
+      <main className="mx-auto max-w-[1400px] px-4 py-5 sm:px-5">{noFirm ? <NoFirm /> : children}</main>
     </MeContext.Provider>
   );
 }
