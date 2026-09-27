@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Iterable
 from datetime import date, timedelta
 from decimal import Decimal
@@ -40,6 +40,7 @@ COSTS = AccountSet.of((4000, 7999))
 SALARY_BASE = AccountSet.of((7010, 7289), (7380, 7389))
 EMPLOYER_CONTRIB = AccountSet.of((7510, 7518))
 PAYABLES = AccountSet.of((2440, 2449))
+MAX_SEPARATE_REUSED_NUMBERS = 10  # fler återanvända nummer i en serie blir ett samlat fynd
 
 
 def _vouchers(ctx: RuleContext) -> list[Voucher]:
@@ -159,10 +160,29 @@ def voucher_number_gap(ctx: RuleContext, rd: RuleDefinition) -> list[FindingCand
             by_series[v.series].append((int(v.number), v))
     out = []
     for series, items in by_series.items():
-        nums = sorted(n for n, _ in items)
-        seen: set[int] = set()
-        for n in nums:
-            if n in seen:
+        counts = Counter(n for n, _ in items)
+        seen = set(counts)
+        reused = sorted(n for n, count in counts.items() if count > 1)
+        if len(reused) > MAX_SEPARATE_REUSED_NUMBERS:
+            # Källsystemet numrerar troligen per dag eller bunt – ett samlat fynd, inte ett per nummer.
+            vouchers_sharing = sum(counts[n] for n in reused)
+            out.append(
+                candidate(
+                    ctx,
+                    rd,
+                    title=f"Nummerserie {series}: {len(reused)} verifikationsnummer förekommer flera gånger",
+                    description=(
+                        f"{len(reused)} nummer i serie {series} används av sammanlagt {vouchers_sharing} "
+                        f"verifikationer {year.fiscal_year.label}. Verifikationsnummer ska vara unika inom "
+                        "serien – kontrollera om källsystemet numrerar per dag eller bunt."
+                    ),
+                    key=(year.fiscal_year.start.isoformat(), series, "dup-series"),
+                    vouchers=[f"{series}{n}" for n in reused[:5]],
+                    details={"reused_numbers": len(reused), "vouchers": vouchers_sharing},
+                )
+            )
+        else:
+            for n in reused:
                 out.append(
                     candidate(
                         ctx,
@@ -173,7 +193,6 @@ def voucher_number_gap(ctx: RuleContext, rd: RuleDefinition) -> list[FindingCand
                         vouchers=[f"{series}{n}"],
                     )
                 )
-            seen.add(n)
         by_no = {n: v for n, v in items}
         # En lucka per par av intilliggande nummer – ett fynd per lucka. Bygg aldrig upp alla tal i
         # spannet: en serie med flera nummerintervall kan spänna över hundratals miljoner nummer.

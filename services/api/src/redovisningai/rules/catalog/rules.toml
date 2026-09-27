@@ -39,7 +39,7 @@ tolerance = "1.00"
 
 [[rule]]
 code = "VOUCHER_NUMBER_GAP"
-version = "1"
+version = "2"
 category = "integrity"
 title = "Lucka eller dubblett i verifikationsnumreringen"
 description = "Verifikationsnummer ska löpa i obruten följd inom varje serie."

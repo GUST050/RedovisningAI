@@ -273,3 +273,44 @@ def test_voucher_gaps_are_found_without_materialising_the_number_range() -> None
     assert [g.details["count"] for g in gaps] == [4_999_997]  # 3–4 999 999 saknas, ett fynd
     assert gaps[0].period == "2023-01"
     assert peak < 20 * 1024 * 1024  # tidigare hundratals MB för detta spann
+
+
+def _numbered(numbers: list[str]):  # type: ignore[no-untyped-def]
+    from datetime import timedelta
+    from decimal import Decimal
+
+    from redovisningai.domain.ledger import Account, FiscalYear, Ledger, Row, Voucher, YearData
+
+    rows = (Row(6110, Decimal("100")), Row(1930, Decimal("-100")))
+    vouchers = [
+        Voucher("S", number, date(2023, 1, 1) + timedelta(days=k % 28), f"Bunt {k}", rows)
+        for k, number in enumerate(numbers)
+    ]
+    ledger = Ledger(
+        "Syntetbolaget AB",
+        None,
+        {6110: Account(6110, "Kontorsmateriel"), 1930: Account(1930, "Bank")},
+        [YearData(FiscalYear(date(2023, 1, 1), date(2023, 12, 31)), vouchers)],
+    )
+    idx = LedgerIndex.build(ledger)
+    period = month(2023, 1)
+    return run_rules(
+        RuleContext(ledger, idx, period, CompanySettings(), assess(idx, period)), codes={"VOUCHER_NUMBER_GAP"}
+    )
+
+
+def test_many_reused_voucher_numbers_in_a_series_give_one_summary_finding() -> None:
+    """Vissa system numrerar per dag eller bunt: en verklig export återanvände 4 253 nummer i samma
+    serie och fick lika många fynd. Det ska synas som ett samlat fynd för serien."""
+    found = _numbered([str(100 + k % 40) for k in range(200)])  # 40 nummer, vart och ett fem gånger
+
+    (summary,) = found
+    assert summary.title == "Nummerserie S: 40 verifikationsnummer förekommer flera gånger"
+    assert summary.details == {"reused_numbers": 40, "vouchers": 200}
+    assert summary.vouchers == ["S100", "S101", "S102", "S103", "S104"]
+
+
+def test_a_few_reused_voucher_numbers_are_still_reported_one_by_one() -> None:
+    found = _numbered(["1", "2", "2", "3", "3", "4"])
+
+    assert [f.title for f in found] == ["Dubblett i nummerserie S: S2", "Dubblett i nummerserie S: S3"]
