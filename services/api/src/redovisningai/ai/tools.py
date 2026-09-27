@@ -16,6 +16,7 @@ from redovisningai.accounting.metrics import REGISTRY
 from redovisningai.accounting.periods import Period, same_period_previous_year
 from redovisningai.ai.metric_change import metric_change_evidence
 from redovisningai.ai.providers.base import ToolSpec
+from redovisningai.analytics.counterparties import counterparty_subject
 from redovisningai.analytics.spend import spend_report
 from redovisningai.facts.model import Fact, FactStore, Unit, Visibility
 from redovisningai.findings.lifecycle import FindingRecord
@@ -126,7 +127,7 @@ def analyst_tools(
         for row in rep.counterparties:
             f = store.new(
                 "amount",
-                f"counterparty:{row['key']}",
+                counterparty_subject(row["key"]),
                 f"Kostnad {row['name']}",
                 Decimal(row["amount"]),
                 Unit.SEK,
@@ -134,7 +135,7 @@ def analyst_tools(
             )
             d = store.new(
                 "change",
-                f"counterparty:{row['key']}:diff",
+                f"{counterparty_subject(row['key'])}:diff",
                 f"Förändring {row['name']}",
                 Decimal(row["diff"]),
                 Unit.SEK,

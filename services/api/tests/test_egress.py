@@ -193,3 +193,30 @@ def test_client_text_keeps_the_codes_and_internal_text_gets_the_names(analysis) 
     assert masked == "Fråga om fakturan från M1"
     assert guard.unmask(masked, client_facing=True) == masked
     assert guard.unmask(masked, client_facing=False) == "Fråga om fakturan från Staples"
+
+
+def _fact_ids(obj: object) -> list[str]:
+    if isinstance(obj, dict):
+        own = [v for k, v in obj.items() if isinstance(v, str) and (k in ("id", "fact_id") or k.endswith("_fact_id"))]
+        return own + [i for v in obj.values() for i in _fact_ids(v)]
+    if isinstance(obj, list):
+        return [i for v in obj for i in _fact_ids(v)]
+    return []
+
+
+def test_fact_ids_sent_to_the_provider_carry_no_counterparty_names(analysis) -> None:  # type: ignore[no-untyped-def]
+    # Fakta-id bygger på faktats ämne; ett motpartsnamn i ämnet följer med id:t, som modellen måste få se.
+    guard = EgressGuard.for_task("A5", analysis)
+    tools = _tools(analysis, guard)
+
+    outputs = [
+        tools["get_counterparty_spend"].handler({"period": "2026-09"}),
+        tools["get_account_movements"].handler({"period": "2026-09", "account": 6110}),
+        tools["get_account_movements"].handler({"period": "2026-09", "account": 6540}),
+        tools["list_changes_since"].handler({"since": "2026-09-01"}),
+    ]
+
+    ids = _fact_ids(outputs)
+    slugs = {re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") for name in guard.pseudonyms.known_names()}
+    assert ids and "staples" in slugs
+    assert not [(slug, i) for slug in slugs for i in ids if slug in i]

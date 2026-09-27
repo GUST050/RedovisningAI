@@ -15,7 +15,7 @@ from redovisningai.accounting.balances import AccountSet, LedgerIndex
 from redovisningai.accounting.categories import CategoryMapping
 from redovisningai.accounting.periods import Period
 from redovisningai.accounting.statements import INCOME_LINES, StatementMapping, income_statement
-from redovisningai.analytics.counterparties import counterparty_for_row
+from redovisningai.analytics.counterparties import counterparty_for_row, counterparty_subject
 from redovisningai.domain.ledger import ZERO
 from redovisningai.facts.model import Fact, FactStore, Unit
 
@@ -344,7 +344,7 @@ def drilldown(
         if cc.diff != 0:
             f = store.new(
                 "change",
-                f"counterparty:{k}",
+                counterparty_subject(k),
                 f"Förändring {cc.name}",
                 cc.diff,
                 Unit.SEK,

@@ -7,6 +7,7 @@ AI (A6) och konsulten kan förfina och bekräfta. Bekräftade alias går före h
 
 from __future__ import annotations
 
+import hashlib
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -110,6 +111,12 @@ def guess_counterparty(text: str | None, aliases: dict[str, str] | None = None) 
         return CounterpartyGuess("", "", 0.1, "none")
     confidence = 0.75 if len(key.split()) <= 3 else 0.55
     return CounterpartyGuess(" ".join(key.split()[:2]), name, confidence, "heuristic", cleaned)
+
+
+def counterparty_subject(key: str) -> str:
+    """Faktaämne för en motpart. Fakta-id bygger på ämnet och skickas till AI:n, så nyckeln hashas
+    (stabilt: samma nyckel ger samma id) i stället för att stå i klartext."""
+    return "counterparty:" + hashlib.sha256(key.encode()).hexdigest()[:12]
 
 
 def counterparty_for_row(voucher: Voucher, row: Row, aliases: dict[str, str] | None = None) -> CounterpartyGuess:
