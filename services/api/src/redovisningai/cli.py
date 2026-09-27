@@ -159,6 +159,21 @@ def cmd_demo_sie(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_calibrate_bridge(args: argparse.Namespace) -> int:
+    """Skriv bara en aggregerad lokal rapport; aldrig verifikationstext eller belopp."""
+    from decimal import Decimal
+
+    from redovisningai.devdata.bridge_calibration import calibrate_large_bookings
+
+    report = calibrate_large_bookings(
+        Path(args.file).read_bytes(),
+        [Decimal(value.strip()) for value in args.shares.split(",")],
+        minimum=Decimal(args.minimum),
+    )
+    print(json.dumps(report, ensure_ascii=False))
+    return 0
+
+
 def cmd_migrate(args: argparse.Namespace) -> int:
     from alembic import command
     from alembic.config import Config
@@ -185,7 +200,8 @@ def cmd_worker_schema(args: argparse.Namespace) -> int:
 
     owner = get_settings().database_url_owner.replace("postgresql+psycopg://", "postgresql://")
     with psycopg.connect(owner, autocommit=True) as conn:
-        exists = conn.execute("select to_regclass('public.procrastinate_jobs')").fetchone()[0]
+        row = conn.execute("select to_regclass('public.procrastinate_jobs')").fetchone()
+        exists = row[0] if row is not None else None
         if exists is None:
             app = procrastinate.App(connector=procrastinate.SyncPsycopgConnector(conninfo=owner))
             with app.open():
@@ -268,6 +284,11 @@ def main(argv: list[str] | None = None) -> int:
     d.add_argument("--out", default="demo-sie")
     d.add_argument("--as-of", default="2026-10-12")
     d.set_defaults(fn=cmd_demo_sie)
+    cb = sub.add_parser("calibrate-bridge", help="Kalibrera stor enskild bokning lokalt från SIE4")
+    cb.add_argument("file")
+    cb.add_argument("--shares", default="0.2,0.25,0.3,0.5")
+    cb.add_argument("--minimum", default="10000")
+    cb.set_defaults(fn=cmd_calibrate_bridge)
     sub.add_parser("migrate", help="Kör databasmigrationer").set_defaults(fn=cmd_migrate)
     sub.add_parser("worker-schema", help="Skapa jobbkön för bakgrundsarbetaren").set_defaults(fn=cmd_worker_schema)
     o = sub.add_parser("create-org", help="Skapa byrå och första admin")

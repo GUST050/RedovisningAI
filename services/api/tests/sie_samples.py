@@ -32,3 +32,25 @@ def minimal_sie_with_missing_rent() -> bytes:
             number += 1
             lines += _voucher(number, day, "Hyra", [(5010, MONTHLY_RENT), (1930, -MONTHLY_RENT)])
     return ("\r\n".join(lines) + "\r\n").encode("cp437")
+
+
+def sie_with_large_bookings() -> bytes:
+    """Tre månader med olika stora konsultkostnader på konto 6550."""
+    lines = [
+        "#FLAGGA 0",
+        "#FORMAT PC8",
+        "#SIETYP 4",
+        '#PROGRAM "Handskriven testfil" 1.0',
+        '#FNAMN "Påhittat Konsultbolag AB"',
+        "#ORGNR 556000-0002",
+        "#RAR 0 20260101 20261231",
+        '#KONTO 1930 "Företagskonto"',
+        '#KONTO 6550 "Konsultarvoden"',
+    ]
+    bookings = {1: [2_000, 3_000, 45_000], 2: [8_000, 12_000], 3: [15_000, 25_000]}
+    number = 0
+    for month, amounts in bookings.items():
+        for amount in amounts:
+            number += 1
+            lines += _voucher(number, f"2026{month:02d}10", "Konsult Exempel", [(6550, amount), (1930, -amount)])
+    return ("\r\n".join(lines) + "\r\n").encode("cp437")

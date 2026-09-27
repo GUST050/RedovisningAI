@@ -218,3 +218,31 @@ Task 15: minor (deferred): _validate_bridge_target lives in api/routes_company.p
 Task 15: minor (deferred): no pytest pins the tool's error paths (unknown category, unused account, unknown kind, payroll-only).
 Task 15: complete (commits 9bb78ac..534c1e1, review clean)
 Task 16: dispatched implementer (sonnet) at 00:12, BASE a7e90a7, report task-16-report.md. Carries R4 (client_package extended), R5 (approved case questions printed), R12 (ask_client → key + template topic, never case title; question-draft route derives topic from the case's findings), plus: A4 verify drops case questions with {m: or bare codes.
+
+## Övertagning 2026-09-28, separat Codex-arbetskopia
+
+Task 16:s oincheckade patch togs som en ögonblicksbild från arbetskatalogen ovan. Den andra
+sessionens arbetskatalog och huvudkatalogen lämnades orörda. Fortsättningen gjordes på grenen
+`codex/finish-transaction-plan` i `/Users/gt/Documents/ChatGPT/redovisning/plan-finish`, från
+`5f4a886`; klonens `origin` är **lokal källa**, inte GitHub. Kontrollera därför fjärrgrenens HEAD
+före en fast-forward-push till `claude/exciting-tesla-udl9xl`.
+
+- Ruling R31 (Task 16): kundrapportens byggare kräver nu en explicit lista av godkända
+  ärendefrågor; API-exporten hämtar endast frågor med sparat beslut, och direkt CLI-anrop får
+  ingen lista — annars kunde CLI exportera ej godkända frågor. Kostnad om fel: tidigare direktanrop
+  som förlitade sig på implicit ärendetext får nu inga sådana frågor.
+- Ruling R32 (Task 16): A4 underkänner alla nakna `M`-koder i kundfrågor, även koder som inte
+  delats ut i anropet — okända koder ska inte nå kunden. Kostnad om fel: en legitim text med en
+  fristående kod som `M3` får skrivas om av konsulten.
+- Task 16: kod och regressionsprov incheckade lokalt som `ba52d76` (13 filer), ännu inte pushade
+  när denna notering skrevs. Full Python-svit grön, två PgBouncer-prov utelämnades; ruff,
+  format, strikt mypy på ändrade moduler, TypeScript-kontroll och Webpack-bygge gröna.
+- Task 17: kalibreringsmodul, CLI och tre regressionstester klara. Syntetiska årsaggregat och
+  tokenmätning finns i `docs/PLAN.md` §9.10. Konsultens val av avslutade perioder saknas ännu;
+  gränsen 25 % / 10 000 kr är därför preliminär och `BRIDGE_VERSION` har inte ändrats.
+- Browserkontroll: syntetisk kund i isolerad databas, 375 px; brygga och inställningskort
+  läsbara, tangentbordsfokus på länkar, tabellen scrollar inom sidan. Ingen AI-åtkomst aktiverad.
+- Live A3 på syntetisk data: 1 500 utdata-token räckte inte med bryggan; 3 000 gav AI-text utan
+  underkända påståenden. Detaljer i `docs/PLAN.md`; säkerhets-evalen är grön.
+- Kvar: konsultens kalibreringsperioder, Task 17-commit, fast-forward-push och slutgranskning av
+  hela grenen inklusive tidigare uppskjutna anmärkningar och en samlad rättningsomgång.

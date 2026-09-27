@@ -1156,7 +1156,9 @@ produktkod ändras först efter att genomförandeplanen godkänts separat.
 
 ## 9.10 Transaktionsbrygga och gemensam AI-gräns (design 2026-09-27)
 
-**Status:** godkänd design för genomförandeplanering; inte implementerad. Bygger på §9.7–9.8 och
+**Status 2026-09-28:** Task 11–16 är implementerade och lokalt verifierade; Task 17:s lokala
+kalibreringsverktyg är implementerat. Slutligt val av gräns inväntar konsultens val av avslutade
+kundperioder och slutgranskningen av hela grenen. Bygger på §9.7–9.8 och
 kompletterar §9.9. Målet är att AI:n ska förklara hur transaktionerna skiljer sig mellan perioderna –
 inte bara nyckeltalen – utan att räkna själv och utan att motpartsnamn eller fritext lämnar byrån.
 Upplägget valdes framför fler summor per fynd (§9.9) och framför att låta modellen läsa
@@ -2234,6 +2236,37 @@ Modify `db/models.py`, `db/repo.py`, `api/routes_company.py`, `api/routes_review
   i `LARGE_BOOKING_SHARE`/`LARGE_BOOKING_MIN`, höj `BRIDGE_VERSION` om de ändras och skriv valet och
   underlaget (bara antal och andelar) i planens status.
 - [ ] Checka in: `git commit -m "feat: calibrate the large-booking thresholds on closed periods"`.
+
+**Genomförandestatus 2026-09-28 (lokal, syntetisk kontroll):** Kalibreringskommandot och tre
+regressionstester är klara. Syntetiska SIE-år 2024 och 2025 gav följande aggregat för
+andelsgränserna 20/25/30/50 % med minsta belopp 10 000 kr:
+
+| År | Månader | 20 % | 25 % | 30 % | 50 % |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 2024 | 12 | 124 / 0,8582 | 102 / 0,6896 | 72 / 0,3648 | 49 / 0,1951 |
+| 2025 | 12 | 125 / 0,9273 | 94 / 0,6358 | 80 / 0,4774 | 53 / 0,2084 |
+
+Varje cell är antal signaler / andel av absolut belopp. Dessa testår är **inte** konsultens valda
+avslutade kundperioder, så 25 % och 10 000 kr är fortfarande preliminära; `BRIDGE_VERSION` är
+oförändrad. Inga namn, texter, verifikationsnummer eller enskilda belopp skrivs av kommandot.
+
+**A3-tokenmätning, syntetiskt bolag, OpenAI gpt-6-luna i testläge:** Utan bryggan blev det ett
+AI-svar med ett verktygsanrop och 7 006 icke cachade indata-token, 5 588 cachade indata-token,
+1 240 utdata-token, utan underkända påståenden. Med bryggan och testtaket 1 500 utdata-token
+blev svaret ofullständigt och regeltext användes (12 291 + 9 908 cachade indata-token och
+1 583 utdata-token debiterades). En separat körning med 3 000 som svarstak gav AI-svar,
+två verktygsanrop, 78 icke cachade + 22 121 cachade indata-token och 2 977 utdata-token utan
+underkända påståenden. Cache och olika antal verktygsanrop gör talen till en driftmätning, inte
+en kontrollerad kostnadsjämförelse. För utökat A3 i testläge behöver
+`RAI_AI_TEST_MAX_OUTPUT_TOKENS` sättas till minst 3 000 för denna kontroll; standardtaket 1 500
+kan ge regeltext. Testlägets månadstak 20 000 token kan förbrukas av en sådan körning.
+
+**Övrig kontroll:** Hela Python-sviten var grön (2 PgBouncer-prov utelämnades) i isolerad
+testdatabas; ruff, strikt mypy på ändrade Python-moduler, TypeScript-kontroll och Webpack-bygge
+var gröna. Nexts standardbygge med Turbopack kunde inte starta sin CSS-process i sandlådan.
+Låsta AI-evalfall var gröna. I en 375 px bred syntetisk webbläsarvy gick bryggan att nå med
+tangentbord, verifikationslänkarna fick fokus och tabellen scrollade inom sidans bredd;
+inställningen för utökat AI-underlag visades utan att godkännande aktiverades.
 
 **Självgranskning mot §9.10:** fyra delar, antals- och beloppseffekt, verifikationsidentitet och
 identifieringsgrad på absoluta belopp (Task 13); signaler (Task 13); lokal analys med urval först i
