@@ -11,7 +11,7 @@ from hashlib import sha256
 from redovisningai.accounting.balances import LedgerIndex
 from redovisningai.accounting.comparisons import ComparisonPair
 from redovisningai.accounting.metric_evidence import evidence_for_component
-from redovisningai.accounting.metric_explanations import MetricExplanation
+from redovisningai.accounting.metric_explanations import MetricComponent, MetricExplanation
 from redovisningai.accounting.periods import add_months, month_start, months_between
 from redovisningai.accounting.periods import month as month_period
 from redovisningai.analytics.counterparties import counterparty_for_row
@@ -19,7 +19,22 @@ from redovisningai.analytics.spend import collect_spend, detect_level_shift, spe
 from redovisningai.domain.ledger import Voucher
 from redovisningai.facts.model import FactStatus
 
-RULE_VERSION = "finding-candidates-v1"
+RULE_VERSION = "finding-candidates-v2"  # v2: återföring/rättelse och samtidig omsättnings- och kostnadsförändring
+ZERO = Decimal("0")
+USABLE = (FactStatus.CALCULATED, FactStatus.PARTIAL)
+COMBINATION_MIN_SEK = Decimal("1000")  # minsta förändring per signal i en kombination
+REVERSAL_MIN_SEK = Decimal("1000")  # minsta resultatpåverkan för en återföring
+REVERSAL_LOOKBACK_MONTHS = 12  # hur långt före perioden originalverifikationen får ligga
+RESULT_ACCOUNTS = range(3000, 8990)  # resultatkonton utan bokslutsposterna 8990–8999
+OPERATING_COST_LINES = ("materials", "other_external", "personnel", "depreciation", "other_operating_expenses")
+COMBINATION_NOTE = (
+    "Två samtidiga förändringar i bokföringen; sambandet mellan dem är inte en fastställd orsak. "
+    "Kontrollera respektive konto och verifikationer i båda perioderna."
+)
+REVERSAL_NOTE = (
+    "Verifikationen motbokar en tidigare verifikation exakt och flyttar resultat mellan perioder. "
+    "Periodiseringar återförs normalt; kontrollera att bokningarna hör ihop och att nettoeffekten är avsedd."
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,19 +93,7 @@ def collect_candidates(
                 # Parameterförändringar utan konto är inte transaktionskandidater.
                 continue
             group_key = "accounts:" + ",".join(map(str, accounts))
-            references: list[dict[str, object]] = []
-            if index is not None:
-                evidence = evidence_for_component(index, component, pair, limit=3)
-                references = [
-                    {
-                        "period": row.period,
-                        "voucher": row.voucher,
-                        "date": row.date.isoformat() if row.date else None,
-                        "source_line": row.source_line,
-                        "content_hash": row.content_hash,
-                    }
-                    for row in (*evidence.current_rows, *evidence.previous_rows)
-                ]
+            references = _component_references(index, component, pair)
             source: dict[str, object] = {
                 "accounts": ",".join(map(str, accounts)),
                 "fact_id": component.fact_id or "",
@@ -144,7 +147,168 @@ def collect_candidates(
         )
     out.extend(_spend_pattern_candidates(index, pair, aliases=aliases, mapping_version=mapping_version))
     out.extend(_possible_duplicate_candidates(index, pair, mapping_version=mapping_version))
+    out.extend(_margin_pressure_candidates(index, pair, explanations, mapping_version=mapping_version))
+    out.extend(_reversal_candidates(index, pair, mapping_version=mapping_version))
     return sorted(out, key=lambda item: (item.group_key, item.code))
+
+
+def _component_references(
+    index: LedgerIndex | None, component: MetricComponent, pair: ComparisonPair, *, limit: int = 3
+) -> list[dict[str, object]]:
+    """Verifikationsrader bakom en bryggkomponent i båda perioderna, som referenser utan text."""
+    if index is None:
+        return []
+    evidence = evidence_for_component(index, component, pair, limit=limit)
+    return [
+        {
+            "period": row.period,
+            "voucher": row.voucher,
+            "date": row.date.isoformat() if row.date else None,
+            "source_line": row.source_line,
+            "content_hash": row.content_hash,
+        }
+        for row in (*evidence.current_rows, *evidence.previous_rows)
+    ]
+
+
+def _voucher_reference(voucher: Voucher) -> dict[str, object]:
+    return {
+        "period": f"{voucher.date:%Y-%m}",
+        "voucher": str(voucher.key),
+        "date": voucher.date.isoformat(),
+        "source_line": voucher.source_line,
+        "content_hash": voucher.content_hash(),
+    }
+
+
+def _margin_pressure_candidates(
+    index: LedgerIndex | None,
+    pair: ComparisonPair,
+    explanations: list[MetricExplanation],
+    *,
+    mapping_version: str,
+) -> list[FindingCandidate]:
+    """Lägre nettoomsättning och högre rörelsekostnader i samma periodpar – en kombination, ingen orsak.
+
+    Båda signalerna kommer från rörelseresultatets exakta brygga med värden i båda perioderna.
+    Nyckeltalens fakta (omsättning, rörelseresultat, rörelsemarginal) följer med som fakta-id.
+    """
+    usable = {e.code: e for e in explanations if e.status in USABLE and e.change is not None}
+    result = usable.get("operating_result")
+    lines = {component.code: component for component in result.components} if result else {}
+    sales = lines.get("net_sales")
+    costs = [lines[code] for code in OPERATING_COST_LINES if code in lines]
+    cost_effect = sum((component.effect for component in costs), ZERO)  # negativ när kostnaderna ökar
+    if result is None or sales is None or sales.previous <= 0:
+        return []
+    if sales.effect > -COMBINATION_MIN_SEK or cost_effect > -COMBINATION_MIN_SEK:
+        return []
+
+    rising = [component for component in costs if component.effect < 0]
+    rising_accounts = sorted(
+        account
+        for component in rising
+        for account in set(component.current_accounts) | set(component.previous_accounts)
+        # Kostnader är negativa i resultatets tecken: lägre värde nu betyder högre kostnad.
+        if component.current_accounts.get(account, ZERO) < component.previous_accounts.get(account, ZERO)
+    )
+    largest = min(rising, key=lambda component: (component.effect, component.code))
+    costs_now = -sum((component.current for component in costs), ZERO)
+    costs_before = -sum((component.previous for component in costs), ZERO)
+    sources: tuple[dict[str, object], ...] = (
+        {
+            "signal": "net_sales",
+            "accounts": ",".join(map(str, sorted(set(sales.current_accounts) | set(sales.previous_accounts)))),
+            "current": str(sales.current),
+            "previous": str(sales.previous),
+            "change": str(sales.effect),
+            "source_level": sales.source_level,
+            "references": _component_references(index, sales, pair),
+        },
+        {
+            "signal": "operating_costs",
+            "accounts": ",".join(map(str, rising_accounts)),
+            "current": str(costs_now),
+            "previous": str(costs_before),
+            "change": str(costs_now - costs_before),
+            "source_level": largest.source_level,
+            "references": _component_references(index, largest, pair),
+        },
+    )
+    metric_codes = tuple(code for code in ("net_sales", "operating_margin", "operating_result") if code in usable)
+    return [
+        FindingCandidate(
+            code="margin_pressure",
+            label="Samtidigt lägre nettoomsättning och högre rörelsekostnader",
+            period_pair=(pair.current.spec, pair.previous.spec),
+            amount_effect=sales.effect + cost_effect,
+            unit="SEK",
+            fact_ids=tuple(sorted({fact_id for code in metric_codes for fact_id in usable[code].fact_ids})),
+            sources=sources,
+            source_level="account_voucher" if any(source["references"] for source in sources) else "account",
+            warnings=(COMBINATION_NOTE, *dict.fromkeys((*result.warnings, *pair.warnings))),
+            group_key=f"margin_pressure:{pair.current.spec}:{pair.previous.spec}",
+            versions={**result.versions, "mapping": mapping_version, "finding_rules": RULE_VERSION},
+            metric_codes=metric_codes,
+        )
+    ]
+
+
+def _reversal_candidates(
+    index: LedgerIndex | None, pair: ComparisonPair, *, mapping_version: str
+) -> list[FindingCandidate]:
+    """Verifikationer i perioden som exakt motbokar en tidigare verifikation (återföring eller rättelse).
+
+    Avtrycket jämförs på effektiva rader (#BTRANS räknas inte, #RTRANS räknas), så en rättad
+    verifikation matchas mot sina gällande rader. Återföringen flyttar resultat mellan perioder och
+    kan förklara en del av ett nyckeltals förändring. Motbokning inom perioden har ingen
+    resultateffekt och hanteras av regeln RAPID_REVERSAL.
+    """
+    if index is None or not index.has_data(pair.current):
+        return []
+    period_start = month_start(pair.current.start)
+    lookback = months_between(add_months(period_start, -REVERSAL_LOOKBACK_MONTHS), add_months(period_start, -1))
+    earlier: dict[tuple[tuple[int, Decimal], ...], list[Voucher]] = {}
+    for first_day in lookback:
+        for voucher in index.vouchers_in(month_period(first_day.year, first_day.month)):
+            earlier.setdefault(voucher.net_by_account(), []).append(voucher)
+
+    matched: set[tuple[str, date]] = set()  # verifikationsnummer börjar om varje räkenskapsår
+    out: list[FindingCandidate] = []
+    for voucher in sorted(index.vouchers_in(pair.current), key=lambda v: (v.date, str(v.key))):
+        signature = voucher.net_by_account()
+        result_effect = -sum((amount for account, amount in signature if account in RESULT_ACCOUNTS), ZERO)
+        if abs(result_effect) < REVERSAL_MIN_SEK:
+            continue
+        negated = tuple(sorted((account, -amount) for account, amount in signature))
+        originals = [w for w in earlier.get(negated, []) if (str(w.key), w.date) not in matched]
+        if not originals:
+            continue
+        original = max(originals, key=lambda w: (w.date, str(w.key)))  # närmast före återföringen
+        matched.add((str(original.key), original.date))
+        out.append(
+            FindingCandidate(
+                code="correction_reversal",
+                label="Återföring eller rättelse av en tidigare verifikation",
+                period_pair=(pair.current.spec, pair.previous.spec),
+                amount_effect=result_effect,
+                unit="SEK",
+                fact_ids=(),
+                sources=(
+                    {
+                        "accounts": ",".join(str(account) for account, _ in signature),
+                        "source_level": "account_voucher",
+                        "original_period": f"{original.date:%Y-%m}",
+                        "references": [_voucher_reference(original), _voucher_reference(voucher)],
+                    },
+                ),
+                source_level="account_voucher",
+                warnings=(REVERSAL_NOTE,),
+                group_key=f"reversal:{original.key}:{voucher.key}:{voucher.date.isoformat()}",
+                versions={"mapping": mapping_version, "finding_rules": RULE_VERSION},
+            )
+        )
+    return out
 
 
 def _spend_pattern_candidates(

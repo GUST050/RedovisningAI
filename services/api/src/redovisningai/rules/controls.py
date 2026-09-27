@@ -1012,10 +1012,7 @@ def large_manual_posting(ctx: RuleContext, rd: RuleDefinition) -> list[FindingCa
 
 
 def _signature(v: Voucher) -> tuple[tuple[int, Decimal], ...]:
-    agg: dict[int, Decimal] = defaultdict(lambda: ZERO)
-    for r in v.effective_rows:
-        agg[r.account] += r.amount
-    return tuple(sorted((a, x) for a, x in agg.items() if x != 0))
+    return v.net_by_account()  # samma avtryck som analysens återföringskandidater
 
 
 @rule("RAPID_REVERSAL")

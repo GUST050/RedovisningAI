@@ -117,6 +117,13 @@ class Voucher:
     def debit_total(self) -> Decimal:
         return sum((r.amount for r in self.effective_rows if r.amount > 0), ZERO)
 
+    def net_by_account(self) -> tuple[tuple[int, Decimal], ...]:
+        """Konteringsavtrycket: effektiva rader netto per konto, sorterat och utan nollsaldon."""
+        totals: dict[int, Decimal] = {}
+        for r in self.effective_rows:
+            totals[r.account] = totals.get(r.account, ZERO) + r.amount
+        return tuple(sorted((account, amount) for account, amount in totals.items() if amount != 0))
+
     def row_date(self, row: Row) -> Date:
         return row.trans_date or self.date
 

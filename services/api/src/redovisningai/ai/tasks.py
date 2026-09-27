@@ -13,7 +13,9 @@ from redovisningai.accounting.categories import DEFAULT_CATEGORIES
 from redovisningai.accounting.statements import BALANCE_LINES, INCOME_LINES
 from redovisningai.ai.providers.base import ModelTier
 from redovisningai.ai.verifier import CLAIM_SCHEMA, VerificationResult, verify_claims
+from redovisningai.analytics.finding_candidates import RULE_VERSION as FINDING_RULE_VERSION
 from redovisningai.facts.model import FactStore
+from redovisningai.review.finding_priorities import PRIORITY_VERSION
 
 BASE_RULES = """Du arbetar åt en svensk redovisningsbyrå som granskar kunders bokföring.
 
@@ -35,7 +37,9 @@ Regler som alltid gäller:
 
 # Bump these whenever the corresponding prompt/schema semantics change. The value
 # is persisted with generated drafts and participates in their staleness checks.
-A3_PROMPT_VERSION = "A3-v4"  # v4: läsverktyget explain_metric_change (minimalt format)
+# A3:s paket bygger på fyndreglerna och deras prioritering, så även deras versioner ingår:
+# ändrade regler gör tidigare utkast inaktuella precis som en ändrad prompt.
+A3_PROMPT_VERSION = f"A3-v4+{FINDING_RULE_VERSION}+{PRIORITY_VERSION}"  # v4: läsverktyget explain_metric_change
 A4_PROMPT_VERSION = "A4-v2"
 A3_FINDING_LABELS = {
     "recurring_cost_change": "förändring i återkommande kostnad",
@@ -43,6 +47,8 @@ A3_FINDING_LABELS = {
     "recurring_level_shift": "möjligt bestående kostnadsskifte",
     "possible_duplicate": "möjlig strukturell dubblett",
     "account_change": "större förändring på konto",
+    "correction_reversal": "återföring eller rättelse av tidigare verifikation",
+    "margin_pressure": "samtidigt lägre nettoomsättning och högre rörelsekostnader",
 }
 
 
