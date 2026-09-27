@@ -273,5 +273,10 @@ på ändrade källmoduler, TypeScript-kontroll och Webpack-bygget är också gr�
 - Ruling R37 (kundutkast): A4:s promptversion blir `A4-v3+BRIDGE_VERSION`. Kostnad om fel:
   äldre sparade kundutkast blir inaktuella och måste skapas och godkännas igen.
 
-Kvar: konsultens val av avslutade kalibreringsperioder, dokumenterat tröskelbeslut och
-fast-forward-push till angiven fjärrgren. Den andra sessionens arbetskatalog är fortfarande orörd.
+Kvar: konsultens val av avslutade kalibreringsperioder och ett dokumenterat tröskelbeslut.
+Den andra sessionens arbetskatalog är fortfarande orörd.
+
+Publicering 2026-09-28: `ba52d76` (Task 16), `3c05db6` (Task 17-verktyg) och `0c41613`
+(slutgranskningens rättningar) pushades som fast-forward från `5f4a886` till
+`claude/exciting-tesla-udl9xl`. Inget PR skapades. Detta är kodleverans med preliminär
+gräns, inte slutligt kalibreringsbeslut på konsultvalda perioder.
