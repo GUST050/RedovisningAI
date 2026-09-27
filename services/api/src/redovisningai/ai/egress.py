@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from redovisningai.ai.providers.base import ToolSpec
-from redovisningai.ai.pseudonymize import PNR, Pseudonymizer, luhn_ok
+from redovisningai.ai.pseudonymize import PNR, WORD_END, Pseudonymizer, luhn_ok
 from redovisningai.analytics.counterparties import PREFIXES, counterparty_for_row, normalize_key
 from redovisningai.domain.ledger import Ledger
 
@@ -22,10 +22,8 @@ if TYPE_CHECKING:
     from redovisningai.review.analysis import CompanyAnalysis
 
 COUNTERPARTY_RE = re.compile(r"\{m:(M\d+)\}")
-# Slutet på ett helt ord, även med svensk genitiv ("Telias", "M1:s"). Bara stammen byts ut.
-_WORD_END = r"(?=(?::?s)?(?!\w))"
 # {m:Mx} eller en fristående kod, i en genomgång så att ett insatt namn aldrig byts ut igen.
-_CODE_OR_REFERENCE = re.compile(COUNTERPARTY_RE.pattern + rf"|(?<!\w)(M\d+){_WORD_END}")
+_CODE_OR_REFERENCE = re.compile(COUNTERPARTY_RE.pattern + rf"|(?<!\w)(M\d+){WORD_END}")
 
 # Tillåtna toppnycklar per uppgift: exakt det projektionerna skickar. Övriga uppgifter maskeras ändå.
 PACKAGE_FIELDS: dict[str, frozenset[str]] = {
@@ -88,7 +86,7 @@ class CounterpartyPseudonyms:
         # Längsta formen först, så att "Fastighets AB Kvarnen" går före "Kvarnen".
         alternatives = sorted((form for form, _ in by_fold.values()), key=lambda form: (-len(form), form))
         alternation = "|".join(re.escape(form) for form in alternatives)
-        self._pattern = re.compile(rf"(?<!\w)(?:{alternation}){_WORD_END}", re.IGNORECASE) if alternatives else None
+        self._pattern = re.compile(rf"(?<!\w)(?:{alternation}){WORD_END}", re.IGNORECASE) if alternatives else None
 
     @classmethod
     def from_ledger(cls, ledger: Ledger, aliases: dict[str, str]) -> CounterpartyPseudonyms:

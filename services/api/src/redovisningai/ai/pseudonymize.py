@@ -12,6 +12,9 @@ from collections.abc import Iterable
 PNR = re.compile(r"\b(?:19|20)?(\d{6})[-+]?(\d{4})\b")
 EMAIL = re.compile(r"\b[\w.+-]+@[\w-]+(?:\.[\w-]+)+\b")
 PHONE = re.compile(r"(?<!\d)(?:\+46[\s-]?|0)7[02369](?:[\s-]?\d){7}(?!\d)")
+# Slutet på ett helt ord, även med svensk genitiv ("Eriks", "Erik:s"); bara stammen byts ut
+# (PERSON_1s). Samma regel gäller motparter och deras koder (ai/egress.py).
+WORD_END = r"(?=(?::?s)?(?!\w))"
 
 
 def luhn_ok(digits: str) -> bool:
@@ -47,7 +50,9 @@ class Pseudonymizer:
         out = EMAIL.sub(lambda m: self._token("EMAIL", m.group(0)), out)
         out = PHONE.sub(lambda m: self._token("TEL", m.group(0)), out)
         for name in self._names:
-            out = re.sub(rf"\b{re.escape(name)}\b", lambda m: self._token("PERSON", m.group(0)), out, flags=re.I)
+            out = re.sub(
+                rf"\b{re.escape(name)}{WORD_END}", lambda m: self._token("PERSON", m.group(0)), out, flags=re.I
+            )
         return out
 
     def unmask(self, text: str) -> str:

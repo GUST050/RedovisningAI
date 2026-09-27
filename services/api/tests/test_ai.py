@@ -384,6 +384,16 @@ def test_pseudonymizer_round_trip() -> None:
     assert p.unmask(masked) == text
 
 
+def test_pseudonymizer_masks_genitive_person_names() -> None:
+    p = Pseudonymizer(["Erik"])
+    text = "Eriks utlägg och Erik:s kvitto, men inte Eriksson."
+
+    masked = p.mask(text)
+
+    assert masked == "PERSON_1s utlägg och PERSON_1:s kvitto, men inte Eriksson."
+    assert p.unmask(masked) == text
+
+
 # ------------------------------------------------------------------ tjänsten
 
 
