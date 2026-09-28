@@ -280,3 +280,35 @@ Publicering 2026-09-28: `ba52d76` (Task 16), `3c05db6` (Task 17-verktyg) och `0c
 (slutgranskningens rättningar) pushades som fast-forward från `5f4a886` till
 `claude/exciting-tesla-udl9xl`. Inget PR skapades. Detta är kodleverans med preliminär
 gräns, inte slutligt kalibreringsbeslut på konsultvalda perioder.
+
+### Rapportanalys och export i isolerad arbetskopia 2026-09-28
+
+Arbetskopia: `plan-finish`, gren `codex/finish-transaction-plan`, ovanpå `f89a973`. Den vanliga
+lokala arbetskatalogens oincheckade filer berördes inte. Kundens invändning var att rapportens analys bara räknade upp
+påståenden. Rapportbyggaren använder nu den lokalt avstämda resultatbryggan och, där periodparet
+tillåter det, transaktionsbryggan för de största resultatraderna. Den anger delposter, antal
+verifikationer, motverkande bidrag och begränsningar i löptext före konsultens godkända AI-text.
+Samma analys används i API- och CLI-export, även i internrapporten. PDF och Word håller en kort
+huvudtalstabell samlad; fullständiga nyckeltal och räkningar ligger i bilagor.
+
+A4-prompten är `A4-v4+BRIDGE_VERSION`; äldre godkända utkast behöver skapas och godkännas igen.
+Den utökade A4-transaktionsdelen skickas fortfarande bara när leverantörsspecifikt godkännande
+finns. Liveprov med syntetisk data och verklig OpenAI-nyckel: utan utökat paket blev texten ytlig;
+med paketet och 3 000 utdatatoken föll anropet tillbaka på reglerna; med appens testgräns 4 000
+gav det fyra analysstycken och tre relevanta frågor utan underkända påståenden. Ett tidigare
+4 000-tokenprov kallade dock ökade externa kostnader för ”lägre”. A4 har därför en deterministisk
+kontroll som underkänner motsägande kostnadsriktning; ett nytt liveprov gav korrekt riktning.
+Detta är syntetisk kvalitetsevidens, inte ett godkännande av en verklig kundrapport.
+
+Verifierat: hela API-testsviten mot separat databas (två PgBouncer-prov hoppades över), låsta
+fake-provider-evals, ruff/format, webtypkontroll och CLI-export av både PDF-rapporter från
+syntetiska SIE-filer. Kund-PDF:en innehöll inte den interna frågan om låneförbudet. Den lokala
+testdatabasen togs bort efter körningen. Kvar före drift: konsultens val av avslutade
+kalibreringsperioder och ett dokumenterat tröskelbeslut, samt granskning av en verklig rapport
+av ansvarig redovisningskonsult.
+
+Kodgranskning före publicering fångade fyra ytterligare rapportgränser: sammanfattningen nämner
+nu samtliga valda resultatdrivare så att restposten stämmer; A4 underkänner motsägande
+kostnadsriktning även i naturliga formuleringar och kundfrågor; CLI-PDF:en märks tydligt som
+ogodkänt utkast i själva dokumentet; internrapportens ärenden och fynd filtreras efter
+användarens lönebehörighet innan titlar och verifikationsnummer skrivs ut.

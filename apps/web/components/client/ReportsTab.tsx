@@ -90,7 +90,7 @@ export function ReportsTab() {
         <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
           <Download
             title="Kundrapport"
-            text="Nyckeltal, resultaträkning och godkänt mötesunderlag. Innehåller aldrig interna fynd."
+            text="Källbunden analys av resultatets viktigaste drivkrafter och transaktionsmönster, sedan godkända konsultkommentarer och sifferbilagor."
             links={[
               ["PDF", `${base}/reports/client?period=${month}${comparePeriod ? `&compare=${encodeURIComponent(comparePeriod)}` : ""}&format=pdf`],
               ["Word", `${base}/reports/client?period=${month}${comparePeriod ? `&compare=${encodeURIComponent(comparePeriod)}` : ""}&format=docx`],
@@ -99,7 +99,7 @@ export function ReportsTab() {
           />
           <Download
             title="Intern granskningsrapport"
-            text="Periodkommentar, periodmognad, ärenden och fynd."
+            text="Källbunden resultat- och transaktionsanalys, intern AI-kommentar och prioriterad uppföljning före bilagorna."
             links={[
               ["PDF", `${base}/reports/internal?period=${month}&format=pdf`],
               ["Word", `${base}/reports/internal?period=${month}&format=docx`],
@@ -256,7 +256,7 @@ function MeetingCard({ d, busy, onGenerate, onSaved }: { d: PeriodDetail; busy: 
           </div>
           {report.stale && <p className="rounded bg-medium-soft px-3 py-2 text-[12px] text-medium">Mötesunderlaget är inaktuellt och får inte godkännas eller exporteras. Skapa ett nytt utkast från aktuell data.</p>}
           <ErrorBox error={err} />
-          <Field label="Sammanfattning (en punkt per rad)">
+          <Field label="Analys till kund (ett stycke per rad)">
             <textarea className={cx(inputCls, "h-32")} value={summary} onChange={(e) => { setSummary(e.target.value); setDecisions({}); }} disabled={!me.permissions.write} />
           </Field>
           {me.permissions.write && (

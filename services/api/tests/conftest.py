@@ -4,6 +4,7 @@ applikationsrollen – precis som i produktion – så att RLS verkligen testas.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import tempfile
 from collections.abc import Iterator
@@ -15,7 +16,9 @@ import pytest
 PG_HOST = os.environ.get("RAI_TEST_PG_HOST", "127.0.0.1")
 PG_PORT = os.environ.get("RAI_TEST_PG_PORT", "54329")
 PG_ADMIN = os.environ.get("RAI_TEST_PG_ADMIN_URL", f"postgresql+psycopg://postgres@{PG_HOST}:{PG_PORT}/postgres")
-TEST_DB = "rai_test"
+TEST_DB = os.environ.get("RAI_TEST_DB", "rai_test")
+if re.fullmatch(r"[a-z_][a-z0-9_]*", TEST_DB) is None:
+    raise ValueError("RAI_TEST_DB måste vara ett enkelt PostgreSQL-databasnamn")
 OWNER_URL = PG_ADMIN.rsplit("/", 1)[0] + f"/{TEST_DB}"
 APP_PASSWORD = quote(os.environ.get("RAI_TEST_APP_DB_PASSWORD", "app"), safe="")
 APP_URL = f"postgresql+psycopg://redovisningai_app:{APP_PASSWORD}@{PG_HOST}:{PG_PORT}/{TEST_DB}"

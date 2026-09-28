@@ -29,9 +29,10 @@ from redovisningai.db import models as m
 from redovisningai.db import repo
 from redovisningai.db.session import TenantContext, anonymous_session, tenant_session
 from redovisningai.findings.lifecycle import precision_by_rule
+from redovisningai.reports.analysis import build_report_analysis
 from redovisningai.reports.builders import client_report, internal_report, reko_documentation, statements_tables
 from redovisningai.reports.document import Table, to_docx, to_pdf, to_xlsx
-from redovisningai.review.analysis import CompanyAnalysis
+from redovisningai.review.analysis import PAYROLL, CompanyAnalysis
 from redovisningai.review.workflow import (
     ALLOWED_ATTACHMENT_TYPES,
     MAX_ATTACHMENT_BYTES,
@@ -150,6 +151,28 @@ def _findings_dicts(s: Session, company_id: uuid.UUID, period: str) -> list[dict
     return [_finding_dict(r) for r in rows if period in r.seen_in_reviews or r.period == period]
 
 
+PAYROLL_FINDING_RULES = frozenset(
+    {"PAYROLL_TAX_NOT_CLEARED", "EMPLOYER_CONTRIBUTION_RATIO", "VACATION_LIABILITY_STATIC"}
+)
+
+
+def _report_review_items(
+    findings: list[dict[str, Any]], cases: list[dict[str, Any]], *, can_payroll: bool
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Interna rapporter får bara visa löneärenden och verifikationer för behöriga användare."""
+    if can_payroll:
+        return findings, cases
+
+    def payroll_finding(finding: dict[str, Any]) -> bool:
+        if finding.get("rule_code") in PAYROLL_FINDING_RULES:
+            return True
+        return any(str(account).isdigit() and int(account) in PAYROLL for account in finding.get("accounts", []))
+
+    visible_findings = [finding for finding in findings if not payroll_finding(finding)]
+    visible_cases = [case for case in cases if not any(payroll_finding(f) for f in case.get("findings", []))]
+    return visible_findings, visible_cases
+
+
 @reports.get("/reports/client")
 def report_client(
     company_id: uuid.UUID,
@@ -192,6 +215,7 @@ def report_client(
         meeting,
         principal.org_name,
         approved_case_questions=approved_questions,
+        analysis=build_report_analysis(a, p, comparison),
     )
     repo.audit(s, principal.ctx, "report.client_exported", company_id, period=period, format=format)
     data = to_pdf(doc) if format == "pdf" else to_docx(doc)
@@ -219,15 +243,26 @@ def report_internal(
     commentary_stale = bool(commentary and not _analysis_metadata_current(a, commentary_meta))
     if commentary_stale:
         commentary = None
-    comparison = a.period(str(commentary_meta["compare_period"])) if commentary and commentary_meta else None
-    doc = internal_report(
-        a.overview(p, comparison),
+    comparison = (
+        a.period(str(commentary_meta["compare_period"]))
+        if commentary and commentary_meta
+        else same_period_previous_year(p, a.ledger)
+    )
+    findings, cases = _report_review_items(
         _findings_dicts(s, company_id, period),
         list_cases(company_id, period, True, s),
+        can_payroll=principal.can_payroll,
+    )
+    doc = internal_report(
+        a.overview(p, comparison),
+        findings,
+        cases,
         commentary,
         a.maturity(p).to_dict(),
         commentary_stale=commentary_stale,
         commentary_metadata=commentary_meta if not commentary_stale else None,
+        statements=a.statements(p, comparison),
+        analysis=build_report_analysis(a, p, comparison),
     )
     repo.audit(s, principal.ctx, "report.internal_exported", company_id, period=period, format=format)
     return _file(

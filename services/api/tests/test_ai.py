@@ -23,7 +23,7 @@ from redovisningai.ai.providers.base import (
 )
 from redovisningai.ai.pseudonymize import Pseudonymizer, luhn_ok
 from redovisningai.ai.service import AIService, FakeProvider, InMemoryBudget
-from redovisningai.ai.tasks import A4_PROMPT_VERSION, period_commentary_input
+from redovisningai.ai.tasks import A4_PROMPT_VERSION, ClientMeetingTask, period_commentary_input
 from redovisningai.ai.tools import analyst_tools
 from redovisningai.ai.verifier import find_literal_numbers, verify_claims
 from redovisningai.devdata.generator import DEMO_PROFILES, generate
@@ -228,6 +228,47 @@ def test_verifier_rejects_literal_numbers_and_unknown_ids() -> None:
     reasons = " ".join(r.reason for r in res.rejected)
     assert "siffror" in reasons and "okända" in reasons and "länkar" in reasons
     assert [r.code for r in res.rejected] == ["literal_number", "unknown_fact", "unsafe_content"]
+
+
+@pytest.mark.parametrize(
+    "wording",
+    [
+        "Lägre övriga externa kostnader",
+        "Lägre externa kostnader",
+        "De övriga externa kostnaderna minskade",
+    ],
+)
+def test_a4_rejects_wrong_cost_direction_even_with_a_valid_fact(wording: str) -> None:
+    store = FactStore()
+    fact = store.new(
+        "variance_component", "line:other_external", "Övriga externa kostnader", Decimal("-67000"), Unit.SEK
+    )
+    package = {
+        "bridge": {
+            "components": [
+                {"code": "other_external", "label": "Övriga externa kostnader", "effect": "-67000", "fact_id": fact.id}
+            ]
+        },
+        "ask_client": [],
+    }
+    claim = {
+        "type": "EXPLANATION",
+        "text": f"{wording} påverkade resultatet med {{f:{fact.id}}}.",
+        "fact_ids": [fact.id],
+    }
+    verified, result = ClientMeetingTask().verify({"summary": [claim], "questions": []}, package, store, set())
+    assert verified["summary"] == []
+    assert [rejection.code for rejection in result.rejected] == ["cost_direction"]
+
+    claim["text"] = f"Högre övriga externa kostnader påverkade resultatet med {{f:{fact.id}}}."
+    verified, result = ClientMeetingTask().verify({"summary": [claim], "questions": []}, package, store, set())
+    assert len(verified["summary"]) == 1
+    assert result.rejected == []
+
+    question = {"type": "QUESTION", "text": "Varför minskade de övriga externa kostnaderna?", "fact_ids": []}
+    verified, result = ClientMeetingTask().verify({"summary": [], "questions": [question]}, package, store, set())
+    assert verified["questions"] == []
+    assert [rejection.code for rejection in result.rejected] == ["cost_direction"]
 
 
 def test_a3_can_cite_maturity_and_open_cases_as_internal_facts(analysis, review) -> None:  # type: ignore[no-untyped-def]

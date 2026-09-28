@@ -24,6 +24,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     from redovisningai.accounting.periods import same_period_previous_year
     from redovisningai.ai.egress import EgressGuard
     from redovisningai.ai.service import AIService
+    from redovisningai.reports.analysis import build_report_analysis
     from redovisningai.reports.builders import client_report, internal_report, statements_tables
     from redovisningai.reports.document import Table, to_pdf, to_xlsx
     from redovisningai.review.analysis import CompanyAnalysis, CompanyContext
@@ -106,12 +107,23 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         ),
     ]
     (out / f"{stem} granskning.xlsx").write_bytes(to_xlsx(sheets))
-    overview = analysis.overview(period)
+    overview = analysis.overview(period, compare)
+    report_analysis = build_report_analysis(analysis, period, compare)
     (out / f"{stem} intern.pdf").write_bytes(
-        to_pdf(internal_report(overview, findings, cases, commentary["data"], review.maturity.to_dict()))
+        to_pdf(
+            internal_report(
+                overview,
+                findings,
+                cases,
+                commentary["data"],
+                review.maturity.to_dict(),
+                statements=stmts,
+                analysis=report_analysis,
+            )
+        )
     )
     (out / f"{stem} kundrapport (utkast).pdf").write_bytes(
-        to_pdf(client_report(overview, stmts, meeting.data, args.firm))
+        to_pdf(client_report(overview, stmts, meeting.data, args.firm, analysis=report_analysis, draft=True))
     )
     print(f"{ledger.company_name}: {len(cases)} ärenden, {len(findings)} fynd för {period.label}.")
     print(f"Periodmognad: {review.maturity.status.value}; {'; '.join(review.maturity.notes) or 'inga anmärkningar'}")

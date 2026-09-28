@@ -6,15 +6,17 @@ eller svaret underkänns. Orkestreringen sker i kod (ai/service.py), inte av en 
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Collection
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 
 from redovisningai.accounting.categories import DEFAULT_CATEGORIES
 from redovisningai.accounting.statements import BALANCE_LINES, INCOME_LINES
 from redovisningai.accounting.transaction_bridge import BRIDGE_VERSION
 from redovisningai.ai.providers.base import ModelTier
-from redovisningai.ai.verifier import CLAIM_SCHEMA, VerificationResult, verify_claims
+from redovisningai.ai.verifier import CLAIM_SCHEMA, Rejection, VerificationResult, verify_claims
 from redovisningai.analytics.finding_candidates import RULE_VERSION as FINDING_RULE_VERSION
 from redovisningai.facts.model import FactStore
 from redovisningai.review.finding_priorities import PRIORITY_VERSION
@@ -45,8 +47,16 @@ Regler som alltid gäller:
 # ändrade regler gör tidigare utkast inaktuella precis som en ändrad prompt.
 # v6: transaktionsbryggan (utökat underlag) och motparter som {m:Mx}; bryggans version ingår.
 A3_PROMPT_VERSION = f"A3-v6+{FINDING_RULE_VERSION}+{PRIORITY_VERSION}+{BRIDGE_VERSION}"
-# v3: kundsäkra transaktionsbryggor och separat godkända ärendefrågor.
-A4_PROMPT_VERSION = f"A4-v3+{BRIDGE_VERSION}"
+# v4: prioriterad, sammanhängande kundanalys av resultat- och transaktionsbryggor.
+A4_PROMPT_VERSION = f"A4-v4+{BRIDGE_VERSION}"
+A4_COST_CODES = frozenset({"materials", "other_external", "personnel", "depreciation", "other_operating_expenses"})
+A4_COST_TERMS = {
+    "materials": r"(?:råvaru(?:kostnad(?:er(?:na)?)?)?|material(?:kostnad(?:er(?:na)?)?)?|råvaror(?:na)?)",
+    "other_external": r"(?:(?:övriga\s+)?externa\s+kostnader(?:na)?)",
+    "personnel": r"(?:personalkostnader(?:na)?)",
+    "depreciation": r"(?:avskrivningar(?:na)?)",
+    "other_operating_expenses": r"(?:(?:övriga\s+)?rörelsekostnader(?:na)?)",
+}
 A3_FINDING_LABELS = {
     "recurring_cost_change": "förändring i återkommande kostnad",
     "transaction_frequency_change": "ändrad verifikationsfrekvens",
@@ -274,6 +284,30 @@ def _verify_claim_fields(
         total.rejected.extend(r.rejected)
         total.downgraded += r.downgraded
     return out, total
+
+
+def _wrong_cost_direction(claim: dict[str, Any], components: list[dict[str, Any]]) -> bool:
+    """Fånga den motsägelse som ett live A4-prov gav: 'lägre kostnader' med negativ resultateffekt."""
+    text = str(claim.get("text", ""))
+    for component in components:
+        if component.get("code") not in A4_COST_CODES:
+            continue
+        effect = Decimal(str(component.get("effect", "0")))
+        if not effect:
+            continue
+        label = str(component.get("label", ""))
+        if not label:
+            continue
+        term = rf"(?:{re.escape(label)}|{A4_COST_TERMS[component['code']]})"
+        wrong_words = r"(?:högre|ökade|steg)" if effect > 0 else r"(?:lägre|minskade|sjönk)"
+        if re.search(
+            rf"\b{wrong_words}\s+(?:(?:de|den|det)\s+)?{term}\b|"
+            rf"\b(?:de\s+)?{term}\s+(?:har\s+|var\s+|blev\s+)?{wrong_words}\b",
+            text,
+            re.I,
+        ):
+            return True
+    return False
 
 
 # ============================================================================ A1 Mappningsassistent
@@ -582,16 +616,27 @@ class ClientMeetingTask(AITask):
         system=BASE_RULES
         + """
 
-Uppgift: skriv underlag till kundmötet för ägaren/VD:n. Texten ska kunna läsas av kunden:
-affärsmässig, begriplig, utan redovisningsjargong, utan interna granskningsdetaljer.
+Uppgift: skriv en verklig periodanalys för ägaren/VD:n. Texten ska kunna läsas av kunden:
+affärsmässig, begriplig, utan redovisningsjargong eller interna granskningsdetaljer.
 Du får bara använda fakta i paketet (alla är godkända för kund). Ge:
-- summary: 3–5 påståenden om hur det går och vad som förändrats,
-- questions: 3–7 frågor eller råd att ta upp på mötet,
+- summary: 2–4 sammanhängande stycken, vart och ett som ett verifierbart påstående med fakta-id.
+  Börja med rörelseresultatets riktning och storlek. Välj sedan de största positiva och negativa
+  bidragen ur resultatbryggan; förklara hur de tillsammans ger nettoförändringen. För minst två
+  väsentliga resultatrader: använd transactions när de finns och skilj på grupper bara i aktuell
+  period, bara i jämförelseperioden, i båda perioderna samt antals- och beloppseffekt. Beskriv
+  vad bokföringen visar och vilken viktig fråga som kvarstår; upprepa inte bara nyckeltalen.
+  Varje stycke får innehålla flera meningar men ska fortfarande gå att granska som en helhet.
+- För en kostnadsrad betyder ett positivt bidrag till rörelseresultatet att den bokförda kostnaden
+  minskade. Ett negativt bidrag betyder att den ökade. Skriv aldrig motsatt riktning.
+- questions: 2–4 konkreta frågor om de största oförklarade förändringarna, inte generella
+  uppmaningar att "följa upp" eller frågor som redan besvaras av bokföringen,
 - case_questions: för varje ärende i "ask_client" en vänlig fråga till kunden om dess topic (en per
   ärende); utgå bara från topic, aldrig en ärende-, verifikations- eller radtext du inte fått.
 transactions, när paketet har dem: grupperade förändringar – bara i aktuell jämförelseperiod, bara i
 den tidigare perioden, fler eller färre verifikationer och ändrat belopp per verifikation. Nämn
-aldrig enskilda motparter; det finns inga koder för dem i det här underlaget.""",
+aldrig enskilda motparter; det finns inga koder för dem i det här underlaget. SIE kan inte bevisa
+priser, leveranser eller affärsbeslut. Sådana möjliga orsaker ska vara HYPOTHESIS eller QUESTION,
+aldrig ett fastslaget svar.""",
         schema={
             "type": "object",
             "properties": {
@@ -636,6 +681,22 @@ aldrig enskilda motparter; det finns inga koder för dem i det här underlaget."
 
     def verify(self, output, package, store, allowed, pseudonyms=frozenset()):  # type: ignore[no-untyped-def]
         out, res = _verify_claim_fields(output, ["summary", "questions"], store, allowed, True, pseudonyms)
+        components = package.get("bridge", {}).get("components", [])
+        bad_ids = {
+            id(claim)
+            for field in ("summary", "questions")
+            for claim in out[field]
+            if _wrong_cost_direction(claim, components)
+        }
+        if bad_ids:
+            for field in ("summary", "questions"):
+                for claim in out[field]:
+                    if id(claim) in bad_ids:
+                        res.rejected.append(
+                            Rejection(claim, "kostnadsriktningen motsäger bokförd resultateffekt", "cost_direction")
+                        )
+                out[field] = [claim for claim in out[field] if id(claim) not in bad_ids]
+            res.accepted = [claim for claim in res.accepted if id(claim) not in bad_ids]
         keys = {c["key"] for c in package.get("ask_client", [])}
         from redovisningai.ai.verifier import BARE_CODE, COUNTERPARTY_PLACEHOLDER, UNSAFE, find_literal_numbers
 

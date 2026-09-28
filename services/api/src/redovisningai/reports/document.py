@@ -22,6 +22,8 @@ class Section:
     bullets: list[str] = field(default_factory=list)
     table: Table | None = None
     note: str | None = None
+    page_break_before: bool = False
+    alert: bool = False
 
 
 @dataclass(slots=True)
@@ -40,12 +42,19 @@ class Document:
 def to_docx(doc: Document) -> bytes:
     from docx import Document as Docx
     from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.shared import Pt, RGBColor
+    from docx.shared import Cm, Pt, RGBColor
 
     d = Docx()
+    d.sections[0].top_margin = Cm(2.1)
+    d.sections[0].bottom_margin = Cm(1.9)
+    d.sections[0].left_margin = Cm(1.9)
+    d.sections[0].right_margin = Cm(1.9)
     style = d.styles["Normal"]
     style.font.name = "Calibri"
     style.font.size = Pt(10.5)
+    style.paragraph_format.space_after = Pt(6)
+    for name in ("Title", "Heading 1"):
+        d.styles[name].font.color.rgb = RGBColor(0x17, 0x35, 0x50)
     if doc.classification:
         p = d.add_paragraph(doc.classification)
         p.runs[0].font.size = Pt(8)
@@ -54,9 +63,17 @@ def to_docx(doc: Document) -> bytes:
     sub = d.add_paragraph(doc.subtitle)
     sub.runs[0].italic = True
     for s in doc.sections:
-        d.add_heading(s.heading, level=1)
+        if s.page_break_before:
+            d.add_page_break()  # type: ignore[no-untyped-call]
+        heading = d.add_heading(s.heading, level=1)
+        if s.table is not None and not s.paragraphs and not s.bullets:
+            heading.paragraph_format.keep_with_next = True
+        if s.alert:
+            heading.runs[0].font.color.rgb = RGBColor(0x9A, 0x4E, 0x22)
         for para in s.paragraphs:
-            d.add_paragraph(para)
+            paragraph = d.add_paragraph(para)
+            if s.alert:
+                paragraph.runs[0].font.color.rgb = RGBColor(0x7A, 0x3F, 0x25)
         for b in s.bullets:
             d.add_paragraph(b, style="List Bullet")
         if s.table is not None and s.table.rows:
@@ -70,12 +87,18 @@ def to_docx(doc: Document) -> bytes:
                     cells[i].text = "" if v is None else str(v)
                     if i in s.table.numeric_cols:
                         cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            if len(s.table.rows) <= 4:
+                for row in t.rows[:-1]:
+                    for cell in row.cells:
+                        for paragraph in cell.paragraphs:
+                            paragraph.paragraph_format.keep_with_next = True
         if s.note:
             n = d.add_paragraph(s.note)
             n.runs[0].font.size = Pt(8.5)
             n.runs[0].italic = True
     if doc.footer:
-        f = d.add_paragraph(doc.footer)
+        f = d.sections[0].footer.paragraphs[0]
+        f.text = doc.footer
         f.runs[0].font.size = Pt(8)
     buf = io.BytesIO()
     d.save(buf)
@@ -90,7 +113,16 @@ def to_pdf(doc: Document) -> bytes:
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
     from reportlab.lib.units import mm
-    from reportlab.platypus import ListFlowable, ListItem, Paragraph, SimpleDocTemplate, Spacer, TableStyle
+    from reportlab.platypus import (
+        KeepTogether,
+        ListFlowable,
+        ListItem,
+        PageBreak,
+        Paragraph,
+        SimpleDocTemplate,
+        Spacer,
+        TableStyle,
+    )
     from reportlab.platypus import Table as RLTable
 
     buf = io.BytesIO()
@@ -100,11 +132,13 @@ def to_pdf(doc: Document) -> bytes:
         leftMargin=18 * mm,
         rightMargin=18 * mm,
         topMargin=16 * mm,
-        bottomMargin=16 * mm,
+        bottomMargin=20 * mm,
         title=doc.title,
     )
     ss = getSampleStyleSheet()
     body = ParagraphStyle("body", parent=ss["BodyText"], fontSize=9.5, leading=13)
+    alert_body = ParagraphStyle("alert_body", parent=body, textColor=colors.HexColor("#7A3F25"))
+    alert_heading = ParagraphStyle("alert_heading", parent=ss["Heading2"], textColor=colors.HexColor("#9A4E22"))
     small = ParagraphStyle("small", parent=body, fontSize=8, textColor=colors.grey)
     cell = ParagraphStyle("cell", parent=body, fontSize=8.5, leading=10.5)
     cell_r = ParagraphStyle("cellr", parent=cell, alignment=2)
@@ -117,11 +151,14 @@ def to_pdf(doc: Document) -> bytes:
         story.append(Paragraph(esc(doc.classification), small))
     story += [Paragraph(esc(doc.title), ss["Title"]), Paragraph(esc(doc.subtitle), small), Spacer(1, 6)]
     for s in doc.sections:
-        story.append(Paragraph(esc(s.heading), ss["Heading2"]))
+        section_story: list[Any] = []
+        if s.page_break_before:
+            story.append(PageBreak())
+        section_story.append(Paragraph(esc(s.heading), alert_heading if s.alert else ss["Heading2"]))
         for para in s.paragraphs:
-            story.append(Paragraph(esc(para), body))
+            section_story.append(Paragraph(esc(para), alert_body if s.alert else body))
         if s.bullets:
-            story.append(
+            section_story.append(
                 ListFlowable([ListItem(Paragraph(esc(b), body)) for b in s.bullets], bulletType="bullet", leftIndent=12)
             )
         if s.table is not None and s.table.rows:
@@ -130,23 +167,43 @@ def to_pdf(doc: Document) -> bytes:
                 data.append(
                     [Paragraph(esc(v), cell_r if i in s.table.numeric_cols else cell) for i, v in enumerate(row)]
                 )
-            t = RLTable(data, repeatRows=1, hAlign="LEFT")
+            available_width = A4[0] - 36 * mm
+            ncols = len(s.table.headers)
+            first_share = 0.40 if ncols == 4 else 1 / ncols
+            col_widths = [available_width * first_share] + [available_width * (1 - first_share) / (ncols - 1)] * (
+                ncols - 1
+            )
+            t = RLTable(data, colWidths=col_widths, repeatRows=1, hAlign="LEFT")
             t.setStyle(
                 TableStyle(
                     [
                         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E8EDF3")),
-                        ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#C5CDD8")),
+                        ("LINEBELOW", (0, 0), (-1, 0), 0.6, colors.HexColor("#8EA5B5")),
+                        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F6F8FA")]),
                         ("VALIGN", (0, 0), (-1, -1), "TOP"),
                     ]
                 )
             )
-            story += [Spacer(1, 4), t]
+            section_story += [Spacer(1, 4), t]
         if s.note:
-            story.append(Paragraph(esc(s.note), small))
-        story.append(Spacer(1, 6))
-    if doc.footer:
-        story.append(Paragraph(esc(doc.footer), small))
-    pdf.build(story)
+            section_story.append(Paragraph(esc(s.note), small))
+        section_story.append(Spacer(1, 6))
+        if s.table is not None and len(s.table.rows) <= 4 and not s.paragraphs and not s.bullets:
+            story.append(KeepTogether(section_story))
+        else:
+            story.extend(section_story)
+
+    def page_footer(canvas: Any, page: Any) -> None:
+        canvas.saveState()
+        canvas.setStrokeColor(colors.HexColor("#CBD5DF"))
+        canvas.line(18 * mm, 15 * mm, A4[0] - 18 * mm, 15 * mm)
+        canvas.setFont("Helvetica", 7.5)
+        canvas.setFillColor(colors.HexColor("#596B78"))
+        canvas.drawString(18 * mm, 10 * mm, doc.footer or doc.classification)
+        canvas.drawRightString(A4[0] - 18 * mm, 10 * mm, f"Sida {page.page}")
+        canvas.restoreState()
+
+    pdf.build(story, onFirstPage=page_footer, onLaterPages=page_footer)
     return buf.getvalue()
 
 
